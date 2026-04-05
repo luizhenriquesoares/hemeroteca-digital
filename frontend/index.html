@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hemeroteca Digital PE</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .font-serif { font-family: 'Playfair Display', serif; }
+        .highlight { background: #fef08a; padding: 1px 2px; border-radius: 2px; }
+        .result-text { line-height: 1.7; }
+        .fade-in { animation: fadeIn 0.3s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        .score-bar { transition: width 0.5s ease; }
+        .search-input:focus { box-shadow: 0 0 0 3px rgba(180, 140, 80, 0.3); }
+        .rag-response p { margin-bottom: 0.75rem; }
+        .rag-response ul, .rag-response ol { margin-left: 1.5rem; margin-bottom: 0.75rem; }
+        .rag-response li { margin-bottom: 0.25rem; }
+        .rag-response strong { color: #44403c; }
+        .rag-response h3 { font-size: 1.1rem; font-weight: 600; margin: 1rem 0 0.5rem; color: #292524; }
+        .typing-cursor::after { content: '\u2588'; animation: blink 0.7s infinite; color: #b45309; }
+        @keyframes blink { 0%,50% { opacity: 1; } 51%,100% { opacity: 0; } }
+    </style>
+</head>
+<body class="bg-stone-50 min-h-screen">
+
+    <!-- Header -->
+    <header class="bg-stone-800 text-stone-100 shadow-lg">
+        <div class="max-w-5xl mx-auto px-6 py-8">
+            <h1 class="font-serif text-3xl font-bold tracking-wide">Hemeroteca Digital</h1>
+            <p class="text-stone-400 mt-1 text-sm">Jornais Hist&oacute;ricos de Pernambuco &mdash; Busca Inteligente com IA</p>
+        </div>
+    </header>
+
+    <!-- Stats Bar -->
+    <div class="bg-stone-700 text-stone-300 text-xs">
+        <div class="max-w-5xl mx-auto px-6 py-2 flex gap-6" id="stats-bar">
+            <span id="stat-loading" class="text-stone-500">Carregando estat&iacute;sticas...</span>
+        </div>
+    </div>
+
+    <!-- Search -->
+    <main class="max-w-5xl mx-auto px-6 py-8">
+        <div class="bg-white rounded-xl shadow-sm border border-stone-200 p-6 mb-8">
+            <form id="search-form" class="flex gap-3">
+                <div class="flex-1 relative">
+                    <input
+                        type="text"
+                        id="search-input"
+                        class="search-input w-full px-4 py-3 text-base border border-stone-300 rounded-lg focus:outline-none focus:border-amber-600 transition"
+                        placeholder="Pergunte sobre pessoas, eventos, lugares... ex: quem era Jo&atilde;o Affonso Botelho?"
+                        autocomplete="off"
+                    />
+                </div>
+                <select id="filter-bib" class="px-3 py-3 border border-stone-300 rounded-lg text-sm text-stone-600 bg-white focus:outline-none">
+                    <option value="">Todos os acervos</option>
+                </select>
+                <button
+                    type="submit"
+                    class="px-6 py-3 bg-amber-700 hover:bg-amber-800 text-white font-medium rounded-lg transition shadow-sm"
+                >
+                    Buscar
+                </button>
+            </form>
+
+            <div class="flex gap-4 mt-3 text-xs text-stone-400">
+                <label class="flex items-center gap-2">
+                    Modo:
+                    <select id="search-mode" class="border border-stone-200 rounded px-2 py-1 text-stone-600 bg-white">
+                        <option value="rag" selected>IA (resposta inteligente)</option>
+                        <option value="semantica">Sem&acirc;ntica (trechos)</option>
+                        <option value="textual">Textual (busca exata)</option>
+                    </select>
+                </label>
+                <label class="flex items-center gap-1" id="n-results-label">
+                    Resultados:
+                    <select id="n-results" class="border border-stone-200 rounded px-1 py-0.5 text-stone-600">
+                        <option value="5">5</option>
+                        <option value="10" selected>10</option>
+                        <option value="20">20</option>
+                        <option value="30">30</option>
+                    </select>
+                </label>
+                <span id="mode-hint" class="text-stone-400 ml-2">A IA l&ecirc; os jornais e responde sua pergunta</span>
+            </div>
+        </div>
+
+        <!-- RAG Response -->
+        <div id="rag-container" class="hidden mb-8">
+            <div class="bg-white rounded-xl shadow-sm border border-amber-200 overflow-hidden">
+                <div class="bg-amber-50 px-5 py-3 border-b border-amber-100 flex items-center gap-2">
+                    <svg class="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+                    </svg>
+                    <span class="text-sm font-medium text-amber-800">Resposta da IA</span>
+                    <span class="text-xs text-amber-600 ml-auto">baseada nos jornais hist&oacute;ricos</span>
+                </div>
+                <div id="rag-response" class="rag-response px-5 py-4 text-sm text-stone-700 leading-relaxed"></div>
+                <div id="rag-fontes" class="hidden px-5 py-3 bg-stone-50 border-t border-stone-100">
+                    <p class="text-xs font-medium text-stone-500 mb-2">Fontes consultadas:</p>
+                    <div id="rag-fontes-list" class="flex flex-wrap gap-2"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results -->
+        <div id="results-container"></div>
+
+        <!-- Empty state -->
+        <div id="empty-state" class="text-center py-16 text-stone-400">
+            <svg class="mx-auto w-16 h-16 mb-4 text-stone-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m5.231 13.481L15 17.25m-4.5-15H5.625c-.621 0-1.125.504-1.125 1.125v16.5c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9zm3.75 11.625a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/>
+            </svg>
+            <p class="text-lg font-medium text-stone-500">Pesquise nos jornais hist&oacute;ricos de Pernambuco</p>
+            <p class="text-sm mt-1">A IA vai ler os jornais e responder suas perguntas sobre pessoas, eventos e lugares</p>
+        </div>
+
+        <!-- Loading -->
+        <div id="loading" class="hidden text-center py-16">
+            <div class="inline-block w-8 h-8 border-2 border-amber-600 border-t-transparent rounded-full animate-spin"></div>
+            <p class="text-stone-500 mt-3" id="loading-text">Buscando nos jornais...</p>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="text-center py-8 text-xs text-stone-400 border-t border-stone-200 mt-8">
+        Hemeroteca Digital PE &mdash; Dados da Biblioteca Nacional do Brasil
+    </footer>
+
+<script>
+const API = '';
+
+// Stats
+async function loadStats() {
+    try {
+        const res = await fetch(`${API}/api/stats`);
+        const data = await res.json();
+        document.getElementById('stats-bar').innerHTML = `
+            <span><strong>${data.acervos_concluidos}</strong>/${data.acervos_total} acervos</span>
+            <span><strong>${data.imagens.toLocaleString()}</strong> p\u00e1ginas capturadas</span>
+            <span><strong>${data.chunks_indexados.toLocaleString()}</strong> chunks indexados</span>
+            <span><strong>${data.progresso_pct}%</strong> do total</span>
+            <span class="ml-auto text-stone-500">${data.acervos_falhas > 0 ? data.acervos_falhas + ' falhas' : 'sem falhas'}</span>
+        `;
+    } catch (e) {
+        document.getElementById('stats-bar').innerHTML = '<span class="text-red-400">Erro ao carregar stats</span>';
+    }
+}
+
+// Acervos dropdown
+async function loadAcervos() {
+    try {
+        const res = await fetch(`${API}/api/acervos`);
+        const data = await res.json();
+        const select = document.getElementById('filter-bib');
+        data.forEach(a => {
+            const opt = document.createElement('option');
+            opt.value = a.bib;
+            opt.textContent = `${a.nome.substring(0, 50)} (${a.paginas.toLocaleString()} pgs)`;
+            select.appendChild(opt);
+        });
+    } catch (e) {}
+}
+
+// Score color
+function scoreColor(score) {
+    if (score >= 0.6) return 'bg-emerald-500';
+    if (score >= 0.4) return 'bg-amber-500';
+    return 'bg-stone-400';
+}
+
+function scoreWidth(score) {
+    return Math.max(5, Math.min(100, score * 100));
+}
+
+// Render results
+function renderResults(data) {
+    const container = document.getElementById('results-container');
+
+    if (!data.resultados || data.resultados.length === 0) {
+        container.innerHTML = `
+            <div class="text-center py-12 text-stone-400">
+                <p class="text-lg">Nenhum resultado para "<strong class="text-stone-600">${data.query}</strong>"</p>
+                <p class="text-sm mt-1">Tente termos diferentes ou mais gen\u00e9ricos</p>
+            </div>
+        `;
+        return;
+    }
+
+    const modo = data._modo || 'semantica';
+    const modoLabel = modo === 'textual' ? 'Busca textual' : 'Busca sem\u00e2ntica';
+
+    container.innerHTML = `
+        <div class="mb-4 flex items-baseline gap-2 flex-wrap">
+            <span class="text-sm text-stone-500">${data.total} trechos encontrados para</span>
+            <span class="font-serif text-lg text-stone-800">"${data.query}"</span>
+            <span class="text-xs px-2 py-0.5 rounded ${modo === 'textual' ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700'}">${modoLabel}</span>
+        </div>
+        ${data.resultados.map((r, i) => `
+            <div class="fade-in bg-white rounded-lg shadow-sm border border-stone-200 mb-4 overflow-hidden" style="animation-delay: ${i * 50}ms">
+                <div class="flex items-center gap-3 px-5 py-3 bg-stone-50 border-b border-stone-100">
+                    <span class="text-xs font-mono text-stone-400">#${i + 1}</span>
+                    <div class="flex-1">
+                        <div class="w-24 h-1.5 rounded-full bg-stone-200 overflow-hidden">
+                            <div class="score-bar h-full rounded-full ${scoreColor(r.score)}" style="width: ${scoreWidth(r.score)}%"></div>
+                        </div>
+                    </div>
+                    <span class="text-xs font-medium ${r.score >= 0.6 ? 'text-emerald-700' : r.score >= 0.4 ? 'text-amber-700' : 'text-stone-500'}">
+                        ${modo === 'textual' ? (r.ocorrencias || '') + ' ocorr\u00eancias' : (r.score * 100).toFixed(0) + '% relev\u00e2ncia'}
+                    </span>
+                </div>
+                <div class="px-5 py-4">
+                    <div class="flex flex-wrap gap-2 mb-3 text-xs">
+                        <span class="px-2 py-0.5 bg-amber-50 text-amber-800 rounded border border-amber-200">
+                            ${r.metadata.bib || '?'}
+                        </span>
+                        ${r.metadata.ano ? `<span class="px-2 py-0.5 bg-blue-50 text-blue-800 rounded border border-blue-200">${r.metadata.ano}</span>` : ''}
+                        ${r.metadata.edicao ? `<span class="px-2 py-0.5 bg-stone-100 text-stone-600 rounded border border-stone-200">${r.metadata.edicao}</span>` : ''}
+                        ${r.metadata.pagina ? `<span class="px-2 py-0.5 bg-stone-100 text-stone-600 rounded border border-stone-200">P\u00e1g. ${r.metadata.pagina}</span>` : ''}
+                    </div>
+                    <p class="result-text text-sm text-stone-700 whitespace-pre-line">${modo === 'textual' ? highlightTerms(r.texto, data._query || data.query) : escapeHtml(r.texto)}</p>
+                </div>
+            </div>
+        `).join('')}
+    `;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Search mode hint
+document.getElementById('search-mode').addEventListener('change', function() {
+    const hint = document.getElementById('mode-hint');
+    const nLabel = document.getElementById('n-results-label');
+    if (this.value === 'rag') {
+        hint.textContent = 'A IA l\u00ea os jornais e responde sua pergunta';
+        nLabel.classList.add('hidden');
+    } else if (this.value === 'textual') {
+        hint.textContent = 'Busca exata nas p\u00e1ginas OCR (ideal para nomes pr\u00f3prios)';
+        nLabel.classList.remove('hidden');
+    } else {
+        hint.textContent = 'Busca por similaridade de significado';
+        nLabel.classList.remove('hidden');
+    }
+});
+
+// Highlight query terms in text
+function highlightTerms(text, query) {
+    const escaped = escapeHtml(text);
+    const terms = query.split(/\s+/).filter(t => t.length > 2);
+    let result = escaped;
+    terms.forEach(term => {
+        const regex = new RegExp(`(${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+        result = result.replace(regex, '<mark class="highlight">$1</mark>');
+    });
+    return result;
+}
+
+// RAG Search with streaming
+async function doRAGSearch(query, bib) {
+    const ragContainer = document.getElementById('rag-container');
+    const ragResponse = document.getElementById('rag-response');
+    const ragFontes = document.getElementById('rag-fontes');
+    const ragFontesList = document.getElementById('rag-fontes-list');
+
+    ragContainer.classList.remove('hidden');
+    ragResponse.innerHTML = '<span class="typing-cursor"></span>';
+    ragFontes.classList.add('hidden');
+
+    let url = `${API}/api/rag?q=${encodeURIComponent(query)}&n=15`;
+    if (bib) url += `&bib=${encodeURIComponent(bib)}`;
+
+    const res = await fetch(url);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+
+    let fullText = '';
+    let buffer = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+                const data = JSON.parse(line.slice(6));
+                if (data.text) {
+                    fullText += data.text;
+                    ragResponse.innerHTML = marked.parse(fullText) + '<span class="typing-cursor"></span>';
+                }
+                if (data.done) {
+                    ragResponse.innerHTML = marked.parse(fullText);
+                    if (data.fontes && data.fontes.length > 0) {
+                        ragFontes.classList.remove('hidden');
+                        ragFontesList.innerHTML = data.fontes
+                            .filter((f, i, arr) => arr.findIndex(x => x.bib === f.bib && x.pagina === f.pagina) === i)
+                            .slice(0, 10)
+                            .map(f => `
+                                <span class="text-xs px-2 py-1 bg-white rounded border border-stone-200 text-stone-600">
+                                    ${f.bib} / ${f.pagina} ${f.ano !== '?' ? '(' + f.ano + ')' : ''}
+                                </span>
+                            `).join('');
+                    }
+                }
+            } catch (e) {}
+        }
+    }
+}
+
+// Search
+async function doSearch(e) {
+    if (e) e.preventDefault();
+
+    const query = document.getElementById('search-input').value.trim();
+    if (!query) return;
+
+    const n = document.getElementById('n-results').value;
+    const bib = document.getElementById('filter-bib').value;
+    const modo = document.getElementById('search-mode').value;
+
+    document.getElementById('empty-state').classList.add('hidden');
+    document.getElementById('results-container').innerHTML = '';
+    document.getElementById('rag-container').classList.add('hidden');
+
+    if (modo === 'rag') {
+        document.getElementById('loading').classList.remove('hidden');
+        document.getElementById('loading-text').textContent = 'Consultando jornais e preparando resposta...';
+        try {
+            document.getElementById('loading').classList.add('hidden');
+            await doRAGSearch(query, bib);
+        } catch (e) {
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('results-container').innerHTML = `
+                <div class="text-center py-8 text-red-500">Erro: ${e.message}</div>
+            `;
+        }
+        return;
+    }
+
+    document.getElementById('loading').classList.remove('hidden');
+    document.getElementById('loading-text').textContent = 'Buscando nos jornais...';
+
+    try {
+        let url = `${API}/api/buscar?q=${encodeURIComponent(query)}&n=${n}&modo=${modo}`;
+        if (bib) url += `&bib=${encodeURIComponent(bib)}`;
+
+        const res = await fetch(url);
+        const data = await res.json();
+        data._modo = modo;
+        data._query = query;
+
+        document.getElementById('loading').classList.add('hidden');
+        renderResults(data);
+    } catch (e) {
+        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('results-container').innerHTML = `
+            <div class="text-center py-8 text-red-500">Erro na busca: ${e.message}</div>
+        `;
+    }
+}
+
+document.getElementById('search-form').addEventListener('submit', doSearch);
+
+// Init
+loadStats();
+loadAcervos();
+document.getElementById('search-input').focus();
+
+// Refresh stats every 60s
+setInterval(loadStats, 60000);
+</script>
+
+</body>
+</html>

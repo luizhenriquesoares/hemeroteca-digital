@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+env/
+dist/
+build/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Data (large files and generated content)
+data/images/
+data/text/
+data/chunks/
+data/cache/
+data/chromadb/
+data/chroma/
+data/debug_captcha/
+
+# Tessdata (binary models - download separately)
+data/tessdata/*.traineddata
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/

@@ -1,0 +1,14 @@
+# 1. Captura hi-res + OCR (máx resolução 6464x8940)
+python main.py ocr-hires --bib 029033_02 --workers 4
+
+# 2. Correção com Claude Opus (grátis no Max 20x)
+python main.py corrigir-claude --model opus --workers 2
+
+# 3. Chunking (usa _corrigido.txt automaticamente)
+python main.py chunkar
+
+# 4. Indexação no ChromaDB
+python main.py indexar
+
+# 5. Buscar / RAG
+python main.py buscar "joão affonso botelho"
