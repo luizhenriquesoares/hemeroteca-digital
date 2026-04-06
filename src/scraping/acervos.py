@@ -5,11 +5,16 @@ import logging
 import re
 import time
 
-from selenium.webdriver.common.by import By
-from selenium.common.exceptions import NoSuchElementException
-
 from src.config import HDB_SEARCH_URL, CACHE_DIR, UF_ALVO
-from src.driver import create_driver
+from src.scraping.driver import create_driver
+from src.scraping.captcha import resolver_captcha
+from src.scraping.acervos_telerik import (
+    aguardar_ajax as _aguardar_ajax_impl,
+    clicar_aba_local as _clicar_aba_local_impl,
+    eval_js as _eval_js_impl,
+    telerik_get_items as _telerik_get_items_impl,
+    telerik_select as _telerik_select_impl,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,30 +22,7 @@ ACERVOS_CACHE = CACHE_DIR / "acervos_pe.json"
 
 
 def _eval_js(driver, code):
-    """Executa JS via CDP Runtime.evaluate (evita strict mode do Chrome 146+).
-
-    O Telerik usa arguments.callee internamente, proibido em strict mode.
-    CDP Runtime.evaluate roda no contexto da página sem impor strict mode.
-    Se o código contém 'return', wrappeia em IIFE automaticamente.
-    """
-    # Se o código já é uma IIFE ou não tem return, usar direto
-    # Senão, wrappear em IIFE
-    expr = code.strip()
-    if "return " in expr and not expr.startswith("(function"):
-        expr = f"(function() {{ {expr} }})()"
-
-    result = driver.execute_cdp_cmd("Runtime.evaluate", {
-        "expression": expr,
-        "returnByValue": True,
-        "awaitPromise": False,
-    })
-    if "exceptionDetails" in result:
-        msg = result["exceptionDetails"].get("text", "Unknown JS error")
-        exc = result["exceptionDetails"].get("exception", {})
-        desc = exc.get("description", msg)
-        raise Exception(f"JS Error: {desc}")
-    value = result.get("result", {}).get("value")
-    return value
+    return _eval_js_impl(driver, code)
 
 def buscar_acervos(driver=None, headless: bool = False) -> list[dict]:
     """Busca todos os acervos de PE, iterando por todos os períodos."""
@@ -105,109 +87,28 @@ def buscar_acervos(driver=None, headless: bool = False) -> list[dict]:
 
 
 def _aguardar_ajax(driver, timeout=20):
-    """Aguarda AJAX Telerik concluir verificando PageRequestManager."""
-    for _ in range(timeout * 2):
-        try:
-            in_progress = _eval_js(driver,
-                "try { return Sys.WebForms.PageRequestManager.getInstance()"
-                ".get_isInAsyncPostBack(); } catch(e) { return false; }"
-            )
-            if not in_progress:
-                overlays = driver.find_elements(By.CSS_SELECTOR, ".raDiv")
-                visible = any(o.is_displayed() for o in overlays)
-                if not visible:
-                    return
-        except Exception:
-            pass
-        time.sleep(0.5)
-    logger.warning(f"Timeout {timeout}s aguardando AJAX")
+    _aguardar_ajax_impl(driver, timeout=timeout)
 
 
 def _telerik_select(driver, combo_id, valor, timeout=15):
-    """Seleciona valor em RadComboBox via API Telerik JS."""
-    _aguardar_ajax(driver)
-
-    js_code = (
-        "(function() {"
-        f"  var combo = $find('{combo_id}');"
-        "  if (!combo) return 'COMBO_NOT_FOUND';"
-        "  if (!combo.get_enabled()) return 'COMBO_DISABLED';"
-        "  var items = combo.get_items();"
-        "  if (!items || items.get_count() === 0) return 'NO_ITEMS';"
-        "  var found = null;"
-        "  var available = [];"
-        "  for (var i = 0; i < items.get_count(); i++) {"
-        "    var text = items.getItem(i).get_text().trim();"
-        "    available.push(text);"
-        f"    if (text === '{valor}') found = items.getItem(i);"
-        "  }"
-        "  if (!found) return 'NOT_FOUND:' + available.join('|');"
-        "  found.select();"
-        "  combo.hideDropDown();"
-        "  return 'OK';"
-        "})()"
-    )
-    result = _eval_js(driver, js_code)
-
-    if result == "OK":
-        time.sleep(1)
-        _aguardar_ajax(driver)
-        return True
-    elif result == "COMBO_DISABLED":
-        for _ in range(timeout):
-            time.sleep(1)
-            _aguardar_ajax(driver)
-            enabled = _eval_js(driver,
-                f"var c=$find('{combo_id}'); return c ? c.get_enabled() : false;"
-            )
-            if enabled:
-                return _telerik_select(driver, combo_id, valor, timeout=5)
-        raise Exception(f"{combo_id} continua desabilitado após {timeout}s")
-    elif result and result.startswith("NOT_FOUND:"):
-        available = result.split(":", 1)[1].split("|")
-        raise Exception(f"'{valor}' não encontrado em {combo_id}. Disponíveis: {available}")
-    else:
-        raise Exception(f"Erro ao selecionar {valor} em {combo_id}: {result}")
+    return _telerik_select_impl(driver, combo_id, valor, timeout=timeout)
 
 
 def _telerik_get_items(driver, combo_id) -> list[str]:
-    """Retorna lista de textos dos items de um RadComboBox."""
-    items = _eval_js(driver,
-        "(function() {"
-        f"  var combo = $find('{combo_id}');"
-        "  if (!combo) return [];"
-        "  var items = combo.get_items();"
-        "  if (!items) return [];"
-        "  var result = [];"
-        "  for (var i = 0; i < items.get_count(); i++) {"
-        "    var text = items.getItem(i).get_text();"
-        "    if (text && text.trim()) result.push(text.trim());"
-        "  }"
-        "  return result;"
-        "})()"
-    )
-    return items or []
+    return _telerik_get_items_impl(driver, combo_id)
 
 
 def _clicar_aba_local(driver):
-    """Clica na aba 'Local' (3a aba) via API Telerik."""
-    _eval_js(driver,
-        "(function() {"
-        "  var ts = $find('RadTabStrip1');"
-        "  if (ts) {"
-        "    var tab = ts.get_tabs().getTab(2);"
-        "    if (tab) tab.click();"
-        "  }"
-        "})()"
-    )
-    time.sleep(2)
-    _aguardar_ajax(driver)
+    _clicar_aba_local_impl(driver)
 
 
 def _setup_e_ler_periodos(driver) -> list[str]:
     """Navega à HDB, seleciona aba Local + PE, retorna períodos disponíveis."""
     driver.get(HDB_SEARCH_URL)
     time.sleep(5)
+
+    # CAPTCHA pode aparecer ao entrar na página
+    resolver_captcha(driver, max_tentativas=5, timeout_manual=300)
 
     # Aba Local (3a)
     _clicar_aba_local(driver)
@@ -216,6 +117,9 @@ def _setup_e_ler_periodos(driver) -> list[str]:
     _telerik_select(driver, "UFCmb3", UF_ALVO)
     time.sleep(3)
     _aguardar_ajax(driver)
+
+    # CAPTCHA pode aparecer após o postback do combo UF
+    resolver_captcha(driver, max_tentativas=5, timeout_manual=300)
 
     # Aguardar PeriodoCmb3 ficar habilitado e populado
     for _ in range(20):
@@ -245,6 +149,9 @@ def _pesquisar_periodo(driver, periodo: str) -> list[dict]:
     driver.get(HDB_SEARCH_URL)
     time.sleep(5)
 
+    # CAPTCHA pode aparecer ao entrar na página
+    resolver_captcha(driver, max_tentativas=5, timeout_manual=300)
+
     # Aba Local
     _clicar_aba_local(driver)
 
@@ -252,6 +159,9 @@ def _pesquisar_periodo(driver, periodo: str) -> list[dict]:
     _telerik_select(driver, "UFCmb3", UF_ALVO)
     time.sleep(3)
     _aguardar_ajax(driver)
+
+    # CAPTCHA pode aparecer após o postback do combo UF
+    resolver_captcha(driver, max_tentativas=5, timeout_manual=300)
 
     # Aguardar PeriodoCmb3 ficar habilitado
     for _ in range(20):
@@ -267,6 +177,9 @@ def _pesquisar_periodo(driver, periodo: str) -> list[dict]:
     time.sleep(3)
     _aguardar_ajax(driver)
 
+    # CAPTCHA pode aparecer após selecionar período
+    resolver_captcha(driver, max_tentativas=5, timeout_manual=300)
+
     # Aguardar botão Pesquisar ficar habilitado
     for _ in range(15):
         btn_enabled = _eval_js(driver,
@@ -277,13 +190,17 @@ def _pesquisar_periodo(driver, periodo: str) -> list[dict]:
             break
         time.sleep(1)
 
-    # Clicar Pesquisar via DOM (Telerik btn.click() não dispara submit)
-    driver.execute_script("document.getElementById('PesquisarBtn3').click();")
+    # Clicar Pesquisar via Selenium (mouse real — JS .click() não dispara submit)
+    btn = driver.find_element(By.ID, "PesquisarBtn3")
+    btn.click()
     time.sleep(3)
+
+    # CAPTCHA pode aparecer após clicar Pesquisar (bloqueia abertura da janela)
+    resolver_captcha(driver, max_tentativas=5, timeout_manual=300)
 
     # Aguardar nova janela abrir
     janela_principal = driver.window_handles[0]
-    for _ in range(20):
+    for _ in range(30):
         if len(driver.window_handles) > 1:
             break
         time.sleep(1)
@@ -316,14 +233,16 @@ def _pesquisar_periodo(driver, periodo: str) -> list[dict]:
 
 
 def _aguardar_resultados(driver, timeout=300):
-    """Aguarda resultados carregarem. Se CAPTCHA, espera resolução manual."""
+    """Aguarda resultados carregarem. Tenta resolver CAPTCHA automaticamente."""
     page = driver.page_source.lower()
     if "rgrow" in page or "bibmaisbutton" in page:
         return
 
-    logger.warning("Aguardando resultados (se CAPTCHA, resolva no navegador)...")
+    # Tentar auto-resolver CAPTCHA (com fallback manual)
+    resolver_captcha(driver, max_tentativas=5, timeout_manual=timeout)
 
-    for _ in range(timeout):
+    # Após CAPTCHA, aguardar resultados aparecerem
+    for _ in range(30):
         time.sleep(1)
         try:
             page = driver.page_source.lower()
@@ -334,7 +253,7 @@ def _aguardar_resultados(driver, timeout=300):
         except Exception:
             return
 
-    logger.error(f"Timeout de {timeout}s aguardando resultados")
+    logger.error("Timeout aguardando resultados após CAPTCHA")
 
 
 def _extrair_tabela(driver) -> list[dict]:

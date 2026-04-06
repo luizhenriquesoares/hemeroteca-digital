@@ -10,11 +10,12 @@ IMAGES_DIR = DATA_DIR / "images"
 TEXT_DIR = DATA_DIR / "text"
 CHUNKS_DIR = DATA_DIR / "chunks"
 CACHE_DIR = DATA_DIR / "cache"
+STRUCTURED_DIR = DATA_DIR / "structured"
 LOGS_DIR = BASE_DIR / "logs"
 CHROMA_DIR = DATA_DIR / "chromadb"
 
 # Criar diretórios se não existirem
-for d in [IMAGES_DIR, TEXT_DIR, CHUNKS_DIR, CACHE_DIR, LOGS_DIR, CHROMA_DIR]:
+for d in [IMAGES_DIR, TEXT_DIR, CHUNKS_DIR, CACHE_DIR, STRUCTURED_DIR, LOGS_DIR, CHROMA_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # URLs da Hemeroteca Digital (redirecionou de memoria.bn.br para memoria.bn.gov.br)
@@ -61,3 +62,4 @@ CHUNK_SIZE = 1000  # caracteres por chunk
 CHUNK_OVERLAP = 200  # sobreposição entre chunks
 EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 CHROMA_COLLECTION = "hemeroteca_pe"
+STRUCTURED_DB = STRUCTURED_DIR / "hemeroteca.db"

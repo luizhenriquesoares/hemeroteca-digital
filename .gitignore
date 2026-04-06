@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+.pycache/
 *.pyc
 *.pyo
 *.pyd
@@ -22,6 +23,8 @@ data/chunks/
 data/cache/
 data/chromadb/
 data/chroma/
+data/benchmarks/
+data/structured/
 data/debug_captcha/
 
 # Tessdata (binary models - download separately)

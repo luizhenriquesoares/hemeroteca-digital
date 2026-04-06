@@ -88,6 +88,8 @@
             </div>
         </div>
 
+        <div id="entity-container" class="hidden mb-8"></div>
+
         <!-- RAG Response -->
         <div id="rag-container" class="hidden mb-8">
             <div class="bg-white rounded-xl shadow-sm border border-amber-200 overflow-hidden">
@@ -99,6 +101,7 @@
                     <span class="text-xs text-amber-600 ml-auto">baseada nos jornais hist&oacute;ricos</span>
                 </div>
                 <div id="rag-response" class="rag-response px-5 py-4 text-sm text-stone-700 leading-relaxed"></div>
+                <div id="rag-structured" class="hidden px-5 py-4 bg-stone-50 border-t border-stone-100"></div>
                 <div id="rag-fontes" class="hidden px-5 py-3 bg-stone-50 border-t border-stone-100">
                     <p class="text-xs font-medium text-stone-500 mb-2">Fontes consultadas:</p>
                     <div id="rag-fontes-list" class="flex flex-wrap gap-2"></div>
@@ -140,7 +143,7 @@ async function loadStats() {
         const data = await res.json();
         document.getElementById('stats-bar').innerHTML = `
             <span><strong>${data.acervos_concluidos}</strong>/${data.acervos_total} acervos</span>
-            <span><strong>${data.imagens.toLocaleString()}</strong> p\u00e1ginas capturadas</span>
+            <span><strong>${data.paginas_processadas.toLocaleString()}</strong> p\u00e1ginas processadas</span>
             <span><strong>${data.chunks_indexados.toLocaleString()}</strong> chunks indexados</span>
             <span><strong>${data.progresso_pct}%</strong> do total</span>
             <span class="ml-auto text-stone-500">${data.acervos_falhas > 0 ? data.acervos_falhas + ' falhas' : 'sem falhas'}</span>
@@ -234,6 +237,151 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function relationLabel(predicate) {
+    const labels = {
+        spouse_of: 'Cônjuge',
+        child_of: 'Filho de',
+        parent_of: 'Pai/Mãe de',
+        holds_role: 'Cargo ou título',
+        widow_of: 'Viúva de',
+        member_of: 'Ligação institucional',
+        resident_of: 'Residência',
+    };
+    return labels[predicate] || predicate;
+}
+
+function renderEntityDossier(entity, candidates = []) {
+    const container = document.getElementById('entity-container');
+    if (!entity) {
+        container.classList.add('hidden');
+        container.innerHTML = '';
+        return;
+    }
+
+    const aliases = (entity.aliases || []).filter(a => a && a !== entity.canonical_name).slice(0, 6);
+    const mentions = (entity.mentions || []).slice(0, 6);
+    const relations = (entity.relations || []).slice(0, 8);
+    const evidences = (entity.evidences || []).slice(0, 6);
+    const candidatesHtml = candidates.length > 1
+        ? `
+            <div class="mt-4 flex flex-wrap gap-2">
+                ${candidates.slice(0, 5).map(item => `
+                    <button
+                        type="button"
+                        onclick="loadEntityById(${item.id})"
+                        class="text-xs px-2 py-1 rounded border border-stone-200 bg-stone-50 hover:bg-stone-100 text-stone-600"
+                    >
+                        ${escapeHtml(item.canonical_name)}
+                    </button>
+                `).join('')}
+            </div>
+        `
+        : '';
+
+    container.classList.remove('hidden');
+    container.innerHTML = `
+        <div class="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
+            <div class="px-5 py-4 border-b border-stone-100 bg-stone-50 flex items-center gap-3">
+                <div>
+                    <p class="text-xs uppercase tracking-wide text-stone-500 font-semibold">Ficha de Pessoa</p>
+                    <h2 class="font-serif text-2xl text-stone-800">${escapeHtml(entity.canonical_name)}</h2>
+                </div>
+                <div class="ml-auto text-right text-xs text-stone-500">
+                    <div>${(entity.mentions || []).length} menções carregadas</div>
+                    <div>${(entity.relations || []).length} relações</div>
+                </div>
+            </div>
+            <div class="p-5 grid gap-4 md:grid-cols-3">
+                <section class="bg-stone-50 rounded-lg border border-stone-200 p-4">
+                    <h3 class="text-xs font-semibold uppercase tracking-wide text-stone-500 mb-3">Identificação</h3>
+                    <p class="text-sm text-stone-700"><strong>Nome:</strong> ${escapeHtml(entity.canonical_name)}</p>
+                    <p class="text-sm text-stone-700 mt-2"><strong>Tipo:</strong> ${escapeHtml(entity.type || 'person')}</p>
+                    ${aliases.length ? `<p class="text-sm text-stone-700 mt-2"><strong>Variantes:</strong> ${aliases.map(escapeHtml).join(', ')}</p>` : ''}
+                    ${candidatesHtml}
+                </section>
+                <section class="bg-stone-50 rounded-lg border border-stone-200 p-4">
+                    <h3 class="text-xs font-semibold uppercase tracking-wide text-stone-500 mb-3">Relações</h3>
+                    ${relations.length ? `
+                        <ul class="space-y-2 text-sm text-stone-700">
+                            ${relations.map(item => `
+                                <li>
+                                    <strong>${escapeHtml(relationLabel(item.predicate))}:</strong>
+                                    ${escapeHtml(item.object_name || item.object_literal || item.subject_name)}
+                                    <span class="text-stone-400">(${escapeHtml(item.status || 'hypothesis')})</span>
+                                </li>
+                            `).join('')}
+                        </ul>
+                    ` : '<p class="text-sm text-stone-400">Nenhuma relação estruturada disponível.</p>'}
+                </section>
+                <section class="bg-stone-50 rounded-lg border border-stone-200 p-4">
+                    <h3 class="text-xs font-semibold uppercase tracking-wide text-stone-500 mb-3">Menções nos Jornais</h3>
+                    ${mentions.length ? `
+                        <ul class="space-y-3 text-sm text-stone-700">
+                            ${mentions.map(item => `
+                                <li>
+                                    <p class="font-medium text-stone-800">${escapeHtml(item.surface_form)}</p>
+                                    <p class="text-stone-600 mt-1">${escapeHtml(item.snippet)}</p>
+                                    <div class="mt-1 text-xs text-stone-500 flex flex-wrap gap-2">
+                                        <span>${escapeHtml(item.jornal || '?')} · ${escapeHtml(item.bib)} / ${escapeHtml(item.pagina)}</span>
+                                        ${item.page_api_url ? `<a class="text-amber-700 hover:underline" href="${item.page_api_url}" target="_blank" rel="noreferrer">ver página</a>` : ''}
+                                        ${item.image_url ? `<a class="text-amber-700 hover:underline" href="${item.image_url}" target="_blank" rel="noreferrer">imagem</a>` : ''}
+                                    </div>
+                                </li>
+                            `).join('')}
+                        </ul>
+                    ` : '<p class="text-sm text-stone-400">Nenhuma menção carregada.</p>'}
+                </section>
+            </div>
+            <div class="px-5 py-4 border-t border-stone-100 bg-white">
+                <h3 class="text-xs font-semibold uppercase tracking-wide text-stone-500 mb-3">Evidências Documentais</h3>
+                ${evidences.length ? `
+                    <div class="grid gap-3 md:grid-cols-2">
+                        ${evidences.map(item => `
+                            <article class="rounded-lg border border-stone-200 p-4 bg-stone-50">
+                                <p class="text-sm text-stone-700">${escapeHtml(item.quote)}</p>
+                                <div class="mt-2 text-xs text-stone-500 flex flex-wrap gap-2">
+                                    <span>${escapeHtml(item.jornal || '?')} · ${escapeHtml(item.bib)} / ${escapeHtml(item.pagina)} ${item.ano && item.ano !== '?' ? '(' + escapeHtml(item.ano) + ')' : ''}</span>
+                                    ${item.page_api_url ? `<a class="text-amber-700 hover:underline" href="${item.page_api_url}" target="_blank" rel="noreferrer">ver página</a>` : ''}
+                                    ${item.image_url ? `<a class="text-amber-700 hover:underline" href="${item.image_url}" target="_blank" rel="noreferrer">imagem</a>` : ''}
+                                </div>
+                            </article>
+                        `).join('')}
+                    </div>
+                ` : '<p class="text-sm text-stone-400">Nenhuma evidência relacional disponível.</p>'}
+            </div>
+        </div>
+    `;
+}
+
+async function loadEntityById(entityId) {
+    const res = await fetch(`${API}/api/entity/${entityId}`);
+    const entity = await res.json();
+    if (!entity.error) {
+        renderEntityDossier(entity);
+    }
+}
+
+async function loadEntityContext(query) {
+    const container = document.getElementById('entity-container');
+    container.classList.add('hidden');
+    container.innerHTML = '';
+
+    try {
+        const searchRes = await fetch(`${API}/api/entity/search?q=${encodeURIComponent(query)}&n=5`);
+        const searchData = await searchRes.json();
+        if (!searchData.resultados || searchData.resultados.length === 0) {
+            return;
+        }
+
+        const best = searchData.resultados[0];
+        const entityRes = await fetch(`${API}/api/entity/${best.id}`);
+        const entity = await entityRes.json();
+        if (!entity.error) {
+            renderEntityDossier(entity, searchData.resultados);
+        }
+    } catch (e) {}
+}
+
 // Search mode hint
 document.getElementById('search-mode').addEventListener('change', function() {
     const hint = document.getElementById('mode-hint');
@@ -266,17 +414,23 @@ function highlightTerms(text, query) {
 async function doRAGSearch(query, bib) {
     const ragContainer = document.getElementById('rag-container');
     const ragResponse = document.getElementById('rag-response');
+    const ragStructured = document.getElementById('rag-structured');
     const ragFontes = document.getElementById('rag-fontes');
     const ragFontesList = document.getElementById('rag-fontes-list');
 
     ragContainer.classList.remove('hidden');
     ragResponse.innerHTML = '<span class="typing-cursor"></span>';
+    ragStructured.classList.add('hidden');
+    ragStructured.innerHTML = '';
     ragFontes.classList.add('hidden');
 
     let url = `${API}/api/rag?q=${encodeURIComponent(query)}&n=15`;
     if (bib) url += `&bib=${encodeURIComponent(bib)}`;
 
     const res = await fetch(url);
+    if (!res.ok || !res.body) {
+        throw new Error(`falha na resposta da API (${res.status})`);
+    }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
 
@@ -301,14 +455,42 @@ async function doRAGSearch(query, bib) {
                 }
                 if (data.done) {
                     ragResponse.innerHTML = marked.parse(fullText);
+                    if (data.structured) {
+                        const s = data.structured;
+                        const pessoas = (s.pessoas || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+                        const evidencias = (s.evidencias || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+                        const resumo = s.resumo ? `<p class="text-sm text-stone-700 leading-relaxed">${escapeHtml(s.resumo)}</p>` : '';
+
+                        if (resumo || pessoas || evidencias) {
+                            ragStructured.classList.remove('hidden');
+                            ragStructured.innerHTML = `
+                                <div class="grid gap-4 md:grid-cols-3">
+                                    <section class="bg-white rounded-lg border border-stone-200 p-4">
+                                        <h3 class="text-xs font-semibold uppercase tracking-wide text-stone-500 mb-2">Resumo</h3>
+                                        ${resumo || '<p class="text-sm text-stone-400">Sem resumo estruturado.</p>'}
+                                    </section>
+                                    <section class="bg-white rounded-lg border border-stone-200 p-4">
+                                        <h3 class="text-xs font-semibold uppercase tracking-wide text-stone-500 mb-2">Pessoas e Entidades</h3>
+                                        ${pessoas ? `<ul class="space-y-2 text-sm text-stone-700">${pessoas}</ul>` : '<p class="text-sm text-stone-400">Nenhum nome detectado.</p>'}
+                                    </section>
+                                    <section class="bg-white rounded-lg border border-stone-200 p-4">
+                                        <h3 class="text-xs font-semibold uppercase tracking-wide text-stone-500 mb-2">Evidências</h3>
+                                        ${evidencias ? `<ul class="space-y-2 text-sm text-stone-700">${evidencias}</ul>` : '<p class="text-sm text-stone-400">Nenhuma evidência estruturada.</p>'}
+                                    </section>
+                                </div>
+                            `;
+                        }
+                    }
                     if (data.fontes && data.fontes.length > 0) {
                         ragFontes.classList.remove('hidden');
                         ragFontesList.innerHTML = data.fontes
                             .filter((f, i, arr) => arr.findIndex(x => x.bib === f.bib && x.pagina === f.pagina) === i)
                             .slice(0, 10)
                             .map(f => `
-                                <span class="text-xs px-2 py-1 bg-white rounded border border-stone-200 text-stone-600">
-                                    ${f.bib} / ${f.pagina} ${f.ano !== '?' ? '(' + f.ano + ')' : ''}
+                                <span class="text-xs px-2 py-1 bg-white rounded border border-stone-200 text-stone-600 inline-flex items-center gap-2">
+                                    <span>${f.jornal && f.jornal !== '?' ? f.jornal + ' · ' : ''}${f.bib} / ${f.pagina} ${f.ano !== '?' ? '(' + f.ano + ')' : ''}</span>
+                                    ${f.page_api_url ? `<a class="text-amber-700 hover:underline" href="${f.page_api_url}" target="_blank" rel="noreferrer">ver página</a>` : ''}
+                                    ${f.image_url ? `<a class="text-amber-700 hover:underline" href="${f.image_url}" target="_blank" rel="noreferrer">imagem</a>` : ''}
                                 </span>
                             `).join('');
                     }
@@ -332,12 +514,15 @@ async function doSearch(e) {
     document.getElementById('empty-state').classList.add('hidden');
     document.getElementById('results-container').innerHTML = '';
     document.getElementById('rag-container').classList.add('hidden');
+    document.getElementById('entity-container').classList.add('hidden');
+    document.getElementById('entity-container').innerHTML = '';
 
     if (modo === 'rag') {
         document.getElementById('loading').classList.remove('hidden');
         document.getElementById('loading-text').textContent = 'Consultando jornais e preparando resposta...';
         try {
             document.getElementById('loading').classList.add('hidden');
+            await loadEntityContext(query);
             await doRAGSearch(query, bib);
         } catch (e) {
             document.getElementById('loading').classList.add('hidden');
@@ -361,6 +546,7 @@ async function doSearch(e) {
         data._query = query;
 
         document.getElementById('loading').classList.add('hidden');
+        await loadEntityContext(query);
         renderResults(data);
     } catch (e) {
         document.getElementById('loading').classList.add('hidden');

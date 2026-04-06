@@ -41,8 +41,8 @@ def _worker_process(worker_id: int, task_queue: mp.Queue, result_queue: mp.Queue
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     # Imports dentro do worker para evitar problemas com multiprocessing spawn
-    from src.driver import create_driver
-    from src.scraper import scrape_jornal
+    from src.scraping.driver import create_driver
+    from src.scraping.scraper import scrape_jornal
 
     # Configurar logging do worker
     logging.basicConfig(
@@ -92,8 +92,8 @@ def _worker_process(worker_id: int, task_queue: mp.Queue, result_queue: mp.Queue
                 chunk_count = 0
 
                 if not capture_only:
-                    from src.ocr import processar_acervo
-                    from src.chunker import criar_chunks_acervo
+                    from src.processing.ocr import processar_acervo
+                    from src.processing.chunker import criar_chunks_acervo
                     wlog.info(f"  OCR...")
                     ocr_count = processar_acervo(bib)
                     wlog.info(f"  Chunking...")
@@ -280,7 +280,7 @@ def run_parallel_pipeline(acervos: list[dict], num_workers: int = 4,
     # Indexação final (sequencial, evita contention no SQLite do ChromaDB)
     if not skip_indexing and completed > 0:
         print("\nIndexando no ChromaDB...")
-        from src.indexer import indexar_todos
+        from src.processing.indexer import indexar_todos
         idx_stats = indexar_todos()
         total_indexed = sum(idx_stats.values())
         print(f"  {total_indexed} chunks indexados no total")

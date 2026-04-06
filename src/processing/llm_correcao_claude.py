@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Correção pós-OCR usando Claude Opus 4.6 via Claude Code CLI.
 
 Usa a sessão autenticada do Claude Code Max (assinatura flat-rate),
@@ -9,11 +11,24 @@ Uso:
 """
 
 import logging
+import os
 import subprocess
 import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+def _load_api_key() -> str | None:
+    """Carrega ANTHROPIC_API_KEY do .env ou env vars."""
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if key:
+        return key
+    env_file = Path(__file__).parent.parent / ".env"
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            if line.startswith("ANTHROPIC_API_KEY="):
+                return line.split("=", 1)[1].strip()
+    return None
 
 SYSTEM_PROMPT = """Você é especialista em transcrição de jornais históricos brasileiros do século XIX.
 
@@ -29,7 +44,7 @@ REGRAS CRÍTICAS:
 7. Retorne APENAS o texto corrigido, sem explicações, sem cortar conteúdo"""
 
 
-def corrigir_texto(texto: str, model: str = "opus", timeout: int = 600) -> str | None:
+def corrigir_texto(texto: str, model: str = "opus", timeout: int = 180) -> str | None:
     """Corrige texto OCR via Claude CLI.
 
     Args:
@@ -46,11 +61,17 @@ def corrigir_texto(texto: str, model: str = "opus", timeout: int = 600) -> str |
     prompt = f"{SYSTEM_PROMPT}\n\nTEXTO A CORRIGIR:\n---\n{texto}\n---"
 
     try:
+        cmd = ["claude", "--model", model, "-p", prompt, "--output-format", "text"]
+        env = os.environ.copy()
+        api_key = _load_api_key()
+        if api_key:
+            env["ANTHROPIC_API_KEY"] = api_key
         result = subprocess.run(
-            ["claude", "--model", model, "-p", prompt, "--output-format", "text"],
+            cmd,
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
         )
         if result.returncode != 0:
             logger.error(f"Claude CLI falhou: {result.stderr[:500]}")
@@ -89,6 +110,16 @@ def corrigir_arquivo(txt_path: Path, model: str = "opus", force: bool = False) -
     except Exception as e:
         logger.error(f"Erro lendo {txt_path}: {e}")
         return False
+
+    # Pular páginas com OCR muito ruim (< 30% palavras reais de 3+ letras)
+    words = original.split()
+    if words:
+        real_words = [w for w in words if len(w) >= 3 and any(c.isalpha() for c in w)]
+        ratio = len(real_words) / len(words)
+        if ratio < 0.4 or len(real_words) < 15:
+            logger.warning(f"OCR ilegível em {txt_path.name} ({ratio:.0%} palavras reais), pulando")
+            out_path.write_text(original, encoding="utf-8")  # salva original como corrigido
+            return True
 
     # Para textos muito grandes, dividir em partes
     if len(original) > 15000:

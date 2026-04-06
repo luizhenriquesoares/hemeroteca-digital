@@ -6,7 +6,7 @@ import chromadb
 from chromadb.config import Settings
 
 from src.config import CHROMA_DIR, CHROMA_COLLECTION, EMBEDDING_MODEL
-from src.chunker import carregar_chunks
+from src.processing.chunker import carregar_chunks
 
 logger = logging.getLogger(__name__)
 

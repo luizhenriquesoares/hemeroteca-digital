@@ -1,26 +1,11 @@
 """Módulo principal de scraping: navega páginas dos jornais e baixa imagens."""
 
-import io
 import json
 import logging
-import re
-import ssl
 import time
-import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Lock
-
-import tesserocr
 
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import (
-    TimeoutException,
-    NoSuchElementException,
-    StaleElementReferenceException,
-)
 
 from src.config import (
     HDB_BASE_URL,
@@ -28,38 +13,24 @@ from src.config import (
     IMAGES_DIR,
     CACHE_DIR,
     CLICK_PAUSE,
-    TESSDATA_DIR,
 )
-from src.driver import human_delay
+from src.scraping.driver import human_delay
+from src.scraping.captcha import captcha_visivel, resolver_captcha
+from src.scraping.scraper_support import (
+    aguardar_carregamento as _aguardar_carregamento_impl,
+    create_download_pool,
+    download_image_task as _download_image_task,
+    fechar_dialog_copyright as _fechar_dialog_copyright_impl,
+    flush_downloads as _flush_downloads_impl,
+    get_pagina_atual_num as _get_pagina_atual_num_impl,
+    get_pasta_atual as _get_pasta_atual_impl,
+    get_state_js as _get_state_js_impl,
+    get_total_paginas as _get_total_paginas_impl,
+    navegar_para_pagina as _navegar_para_pagina_impl,
+    proxima_pagina as _proxima_pagina_impl,
+)
 
 logger = logging.getLogger(__name__)
-
-# SSL context reutilizável (evita recriar por imagem)
-_SSL_CTX = ssl.create_default_context()
-_SSL_CTX.check_hostname = False
-_SSL_CTX.verify_mode = ssl.CERT_NONE
-
-
-def _download_image_task(img_src, img_file, cookie_str, user_agent, referer):
-    """Tarefa de download executada em thread separada."""
-    if img_file.exists():
-        return img_file
-    try:
-        req = urllib.request.Request(img_src)
-        req.add_header("Cookie", cookie_str)
-        req.add_header("User-Agent", user_agent)
-        req.add_header("Referer", referer)
-        req.add_header("Accept", "image/*")
-        with urllib.request.urlopen(req, context=_SSL_CTX, timeout=20) as response:
-            data = response.read()
-            if len(data) > 1000:
-                with open(img_file, "wb") as f:
-                    f.write(data)
-                return img_file
-    except Exception as e:
-        logger.debug(f"Download falhou {img_file.name}: {e}")
-    return None
-
 
 class JornalScraper:
     """Scraper para um jornal específico da HDB."""
@@ -73,7 +44,7 @@ class JornalScraper:
         self.cache_file = CACHE_DIR / f"{bib}_pages.json"
         self.pages_done = self._load_cache()
         # Thread pool para downloads assíncronos
-        self._download_pool = ThreadPoolExecutor(max_workers=3)
+        self._download_pool = create_download_pool(max_workers=3)
         self._download_futures = []
         # Cache de cookies/headers (evita pedir ao driver toda página)
         self._cookie_str = None
@@ -102,19 +73,11 @@ class JornalScraper:
 
     def _flush_downloads(self):
         """Aguarda downloads pendentes terminarem."""
-        for fut in self._download_futures:
-            try:
-                fut.result(timeout=30)
-            except Exception:
-                pass
+        _flush_downloads_impl(self._download_futures)
         self._download_futures.clear()
 
     def _get_pasta_atual(self) -> str:
-        try:
-            el = self.driver.find_element(By.ID, "PastaTxt")
-            return (el.text or el.get_attribute("title") or "").strip()
-        except Exception:
-            return ""
+        return _get_pasta_atual_impl(self.driver)
 
     def _avancar_para_pagina_global(self, target: int):
         """Avança via PagPosBtn até chegar na página global desejada."""
@@ -141,33 +104,11 @@ class JornalScraper:
         logger.info(f"Avançou para página global {target} (pulou {skipped})")
 
     def _get_pagina_atual_num(self) -> int:
-        try:
-            el = self.driver.find_element(By.ID, "PagAtualTxt")
-            return int(el.get_attribute("value") or "1")
-        except Exception:
-            return 1
+        return _get_pagina_atual_num_impl(self.driver)
 
     def _get_state_js(self):
         """Obtém todo o estado da página em uma única chamada JS."""
-        try:
-            return self.driver.execute_script("""
-                var pasta = document.getElementById('PastaTxt');
-                var pagAtual = document.getElementById('PagAtualTxt');
-                var pagTotal = document.getElementById('PagTotalLbl');
-                var pagFis = document.getElementById('hPagFis');
-                var img = document.getElementById('DocumentoImg');
-                var imgSrc = (img && img.src && img.src.indexOf('cache') > -1) ? img.src : null;
-                var totalMatch = pagTotal ? pagTotal.innerText.match(/\\/(\\d+)/) : null;
-                return {
-                    pasta: pasta ? (pasta.innerText || pasta.title || '').trim() : '',
-                    pagAtual: pagAtual ? parseInt(pagAtual.value) || 1 : 1,
-                    pagTotal: totalMatch ? parseInt(totalMatch[1]) : 0,
-                    pagFis: pagFis ? pagFis.value || '' : '',
-                    imgSrc: imgSrc
-                };
-            """)
-        except Exception:
-            return None
+        return _get_state_js_impl(self.driver)
 
     def scrape_todas_paginas(self, max_pages: int = 0) -> list[dict]:
         """Navega por TODAS as páginas de TODAS as edições do jornal."""
@@ -338,196 +279,31 @@ class JornalScraper:
         return resultados
 
     def _captcha_visivel(self) -> bool:
-        try:
-            iframes = self.driver.find_elements(By.NAME, "CaptchaWnd")
-            if not iframes:
-                return False
-            parent = iframes[0].find_element(By.XPATH, "./..")
-            return parent.is_displayed()
-        except Exception:
-            return False
+        return captcha_visivel(self.driver)
 
     def _resolver_captcha(self, max_tentativas=5, timeout_manual=300):
-        """Detecta e tenta resolver o CAPTCHA automaticamente via OCR."""
-        if not self._captcha_visivel():
-            return True
-
-        for tentativa in range(max_tentativas):
-            if not self._captcha_visivel():
-                logger.info("CAPTCHA resolvido!")
-                return True
-
-            logger.info(f"CAPTCHA detectado, tentativa {tentativa + 1}/{max_tentativas}...")
-
-            try:
-                iframe = self.driver.find_element(By.NAME, "CaptchaWnd")
-                self.driver.switch_to.frame(iframe)
-                time.sleep(0.5)
-
-                captcha_img = self.driver.find_element(By.ID, "RadCaptcha1_CaptchaImageUP")
-
-                # Pegar imagem via screenshot do elemento (bypassa Cloudflare 403)
-                try:
-                    img_data = captcha_img.screenshot_as_png
-                except Exception as e:
-                    logger.warning(f"Screenshot captcha falhou: {e}")
-                    self.driver.switch_to.default_content()
-                    continue
-
-                texto_captcha = self._ocr_captcha(img_data)
-                if not texto_captcha:
-                    logger.warning("OCR falhou no CAPTCHA, refreshing...")
-                    try:
-                        refresh = self.driver.find_element(By.ID, "RadCaptcha1_CaptchaLinkButton")
-                        self.driver.execute_script("arguments[0].click();", refresh)
-                        time.sleep(1.5)
-                    except Exception:
-                        pass
-                    self.driver.switch_to.default_content()
-                    continue
-
-                logger.info(f"OCR leu CAPTCHA: '{texto_captcha}'")
-
-                self.driver.execute_script(
-                    "var el = document.getElementById('RadCaptcha1_CaptchaTextBox');"
-                    "if (el) { el.value = arguments[0]; el.dispatchEvent(new Event('change')); }",
-                    texto_captcha
-                )
-                time.sleep(0.3)
-
-                self.driver.execute_script(
-                    "document.getElementById('EnviarBtn_input').click();"
-                )
-
-                self.driver.switch_to.default_content()
-                time.sleep(2)
-
-                if not self._captcha_visivel():
-                    logger.info("CAPTCHA resolvido automaticamente!")
-                    self._refresh_http_headers()
-                    return True
-
-                logger.warning("CAPTCHA incorreto, tentando novamente...")
-
-            except Exception as e:
-                logger.warning(f"Erro ao resolver CAPTCHA: {e}")
-                try:
-                    self.driver.switch_to.default_content()
-                except Exception:
-                    pass
-
-        logger.warning("Auto-solve falhou. Resolva o CAPTCHA manualmente...")
-        for _ in range(timeout_manual):
-            time.sleep(1)
-            if not self._captcha_visivel():
-                logger.info("CAPTCHA resolvido manualmente!")
-                self._refresh_http_headers()
-                return True
-
-        logger.error("Timeout esperando CAPTCHA")
-        return False
-
-    def _ocr_captcha(self, img_data: bytes) -> str:
-        try:
-            from PIL import Image, ImageFilter
-
-            img = Image.open(io.BytesIO(img_data))
-            gray = img.convert("L")
-
-            approaches = [
-                lambda g: g.filter(ImageFilter.MedianFilter(5)).point(
-                    lambda p: 255 if p > 140 else 0
-                ),
-                lambda g: g.filter(ImageFilter.MedianFilter(3)).point(
-                    lambda p: 255 if p > 140 else 0
-                ),
-                lambda g: g.point(lambda p: 255 if p > 160 else 0),
-            ]
-
-            for preprocess in approaches:
-                processed = preprocess(gray)
-                big = processed.resize(
-                    (img.width * 3, img.height * 3), Image.LANCZOS
-                )
-                text = tesserocr.image_to_text(
-                    big, lang="eng", path=str(TESSDATA_DIR),
-                    psm=tesserocr.PSM.SINGLE_WORD,
-                )
-                cleaned = re.sub(r'[^A-Za-z0-9]', '', text.strip())
-                if len(cleaned) >= 3:
-                    return cleaned
-
-            return ""
-
-        except Exception as e:
-            logger.warning(f"OCR do CAPTCHA exception: {e}", exc_info=True)
-            return ""
+        """Detecta e tenta resolver o CAPTCHA. Refresh headers HTTP após sucesso."""
+        return resolver_captcha(
+            self.driver,
+            max_tentativas=max_tentativas,
+            timeout_manual=timeout_manual,
+            on_success=self._refresh_http_headers,
+        )
 
     def _fechar_dialog_copyright(self):
-        try:
-            iframes = self.driver.find_elements(By.NAME, "PesqOpniaoRadWindow")
-            if iframes:
-                parent = iframes[0].find_element(By.XPATH, "./../../..")
-                close_btns = parent.find_elements(By.CSS_SELECTOR, "a.rwCloseButton, a[title='Close']")
-                if close_btns:
-                    self.driver.execute_script("arguments[0].click();", close_btns[0])
-                    time.sleep(0.5)
-                    return
-
-            self.driver.execute_cdp_cmd("Runtime.evaluate", {
-                "expression": "var wnd = $find('PesqOpniaoRadWindow'); if (wnd) wnd.close();",
-                "returnByValue": True,
-            })
-            time.sleep(0.5)
-        except Exception:
-            pass
+        _fechar_dialog_copyright_impl(self.driver)
 
     def _get_total_paginas(self) -> int:
-        try:
-            total = self.driver.execute_script("""
-                var el = document.getElementById('PagTotalLbl');
-                if (el) {
-                    var m = el.innerText.match(/\\/(\\d+)/);
-                    if (m) return parseInt(m[1]);
-                }
-                return 0;
-            """)
-            return total or 0
-        except Exception:
-            return 0
+        return _get_total_paginas_impl(self.driver)
 
     def _navegar_para_pagina(self, num_pagina: int):
-        try:
-            from selenium.webdriver.common.keys import Keys
-            page_input = self.driver.find_element(By.ID, "PagAtualTxt")
-            page_input.clear()
-            page_input.send_keys(str(num_pagina))
-            page_input.send_keys(Keys.RETURN)
-            time.sleep(1)
-            self._aguardar_carregamento()
-        except Exception as e:
-            logger.warning(f"Erro ao navegar para página {num_pagina}: {e}")
+        _navegar_para_pagina_impl(self.driver, num_pagina, self._aguardar_carregamento)
 
     def _proxima_pagina(self):
-        try:
-            self.driver.execute_script(
-                "var btn = document.getElementById('PagPosBtn');"
-                "if (btn) btn.click();"
-            )
-            time.sleep(CLICK_PAUSE)
-            self._aguardar_carregamento()
-        except Exception as e:
-            logger.warning(f"Erro ao avançar página: {e}")
+        _proxima_pagina_impl(self.driver, CLICK_PAUSE, self._aguardar_carregamento)
 
     def _aguardar_carregamento(self, timeout: int = 10):
-        try:
-            els = self.driver.find_elements(By.ID, "updateprogressloaddiv")
-            if els and els[0].is_displayed():
-                WebDriverWait(self.driver, timeout).until(
-                    EC.invisibility_of_element_located((By.ID, "updateprogressloaddiv"))
-                )
-        except (TimeoutException, Exception):
-            pass
+        _aguardar_carregamento_impl(self.driver, timeout=timeout)
 
 
 def scrape_jornal(driver, bib: str, nome: str, max_pages: int = 0) -> list[dict]:

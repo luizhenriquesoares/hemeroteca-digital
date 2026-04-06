@@ -43,11 +43,11 @@ Hemeroteca Digital (memoria.bn.gov.br)
 
 ```bash
 # Ambiente virtual
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 
 # Dependências
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 
 # Modelos Tesseract (por, eng) - baixar em data/tessdata/
 # Disponíveis em https://github.com/tesseract-ocr/tessdata
@@ -58,40 +58,46 @@ pip install -r requirements.txt
 ### Listagem e captura
 ```bash
 # Listar acervos de PE disponíveis
-python main.py listar
+python3 main.py listar
 
 # OCR hi-res (captura + OCR + delete imagem em um passo)
-python main.py ocr-hires --bib 029033_02 --workers 4
+python3 main.py ocr-hires --bib 029033_02 --workers 4
 
 # Teste em amostra (2 páginas, mantém imagens para validação)
-python main.py ocr-hires --bib 029033_02 --max-pages 2 --keep-images
+python3 main.py ocr-hires --bib 029033_02 --max-pages 2 --keep-images
 ```
 
 ### Correção LLM
 ```bash
-# Corrigir textos com Claude Opus (via Claude Code Max)
-python main.py corrigir-claude --model opus --workers 2
+# Corrigir textos com OpenAI
+python3 main.py corrigir --provider openai --model gpt-4o-mini --workers 2
 
-# Ou Sonnet/Haiku (mais rápido)
-python main.py corrigir-claude --model sonnet --workers 3
+# Corrigir textos com Claude Code CLI
+python3 main.py corrigir --provider claude --model opus --workers 2
+
+# Ou Sonnet/Haiku
+python3 main.py corrigir --provider claude --model sonnet --workers 3
+
+# Benchmark da mesma página entre OpenAI mini, OpenAI max e Claude
+python3 main.py benchmark-correcao data/text/029033_01/029033_01_00066.txt --sample-chars 2000
 ```
 
 ### Indexação RAG
 ```bash
 # Chunking (usa _corrigido.txt automaticamente se existir)
-python main.py chunkar
+python3 main.py chunkar
 
 # Indexar no ChromaDB
-python main.py indexar
+python3 main.py indexar
 
 # Busca semântica CLI
-python main.py buscar "joão affonso botelho"
+python3 main.py buscar "joão affonso botelho"
 ```
 
 ### Frontend web
 ```bash
 # Inicia servidor FastAPI com RAG streaming
-uvicorn src.api:app --host 0.0.0.0 --port 8000
+python3 -m uvicorn src.web.api:app --host 0.0.0.0 --port 8000
 
 # Abrir http://localhost:8000
 ```
@@ -117,27 +123,49 @@ uvicorn src.api:app --host 0.0.0.0 --port 8000
 
 ```
 hemeroteca-digital/
-├── main.py                        # CLI (click)
+├── main.py                        # Entrypoint fino do CLI
+├── web.py                         # Compat wrapper para a API web
 ├── src/
+│   ├── cli/
+│   │   └── app.py                 # CLI principal (click)
+│   ├── web/
+│   │   └── api.py                 # FastAPI oficial: busca + RAG + SSE
+│   ├── scraping/
+│   │   ├── driver.py              # undetected-chromedriver / Cloudflare bypass
+│   │   ├── acervos.py             # Listagem de acervos PE
+│   │   ├── scraper.py             # Captura legacy + CAPTCHA
+│   │   ├── hires_pipeline.py      # Pipeline hi-res
+│   │   └── parallel.py            # Orquestração paralela
+│   ├── processing/
+│   │   ├── ocr.py                 # OCR Tesseract + seleção conservadora
+│   │   ├── metadata_enrichment.py # Enriquecimento de metadados sem refazer OCR
+│   │   ├── correcao_provider.py   # Switch OpenAI/Claude para correção
+│   │   ├── llm_correcao.py        # Correção via OpenAI API
+│   │   ├── llm_correcao_claude.py # Correção via Claude Code CLI
+│   │   ├── chunker.py             # Split de textos (LangChain)
+│   │   ├── indexer.py             # ChromaDB + embeddings
+│   │   └── search.py              # Busca híbrida e evidências
+│   ├── structured/
+│   │   ├── models.py              # Modelos de domínio estruturado
+│   │   ├── entities.py            # Extração de entidades
+│   │   ├── relations.py           # Extração de relações
+│   │   ├── repository.py          # Persistência SQLite
+│   │   └── service.py             # Orquestração da camada estruturada
+│   ├── benchmarks/
+│   │   ├── correcao.py            # Benchmark OpenAI mini/max vs Claude
+│   │   └── ocr.py                 # Benchmark OCR salvo vs OCR adaptativo
 │   ├── config.py                  # Paths, URLs, constantes
-│   ├── driver.py                  # undetected-chromedriver (Cloudflare bypass)
-│   ├── acervos.py                 # Listagem de acervos PE (Telerik navigation)
-│   ├── scraper.py                 # Captura low-res (legacy) + CAPTCHA solver
-│   ├── hires_pipeline.py          # Pipeline hi-res: download → OCR → delete
-│   ├── ocr.py                     # OCR Tesseract com detecção de colunas
-│   ├── llm_correcao.py            # Correção via OpenAI GPT-4o-mini (API)
-│   ├── llm_correcao_claude.py     # Correção via Claude Code CLI (Max plan)
-│   ├── chunker.py                 # Split de textos (LangChain)
-│   ├── indexer.py                 # ChromaDB + embeddings multilíngue
-│   ├── parallel.py                # Orquestração paralela
-│   └── api.py                     # FastAPI: RAG + SSE streaming
+│   └── __init__.py                # Aliases lazy para compatibilidade legada
 ├── frontend/
-│   └── index.html                 # UI web com markdown rendering
+│   └── index.html                 # UI web com ficha historiográfica
+├── scripts/
+│   └── experimental/              # Scripts e testes exploratórios isolados
 ├── data/                          # (gitignored)
 │   ├── images/                    # Imagens temporárias (hi-res)
 │   ├── text/                      # OCR bruto + _corrigido.txt
 │   ├── chunks/                    # JSONL por acervo
 │   ├── chromadb/                  # Índice vetorial persistente
+│   ├── structured/                # SQLite e artefatos estruturados
 │   └── tessdata/                  # Modelos Tesseract (por, eng)
 └── logs/                          # (gitignored)
 ```
