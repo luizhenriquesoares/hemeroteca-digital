@@ -26,6 +26,7 @@ _LEGACY_MODULES = {
     "api": "src.web.api",
     "benchmark_correcao": "src.benchmarks.correcao",
     "benchmark_ocr": "src.benchmarks.ocr",
+    "benchmark_search": "src.benchmarks.search",
     "captcha": "src.scraping.captcha",
     "chunker": "src.processing.chunker",
     "correcao_provider": "src.processing.correcao_provider",

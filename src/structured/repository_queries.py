@@ -14,11 +14,12 @@ ON CONFLICT(bib, pagina) DO UPDATE SET
 
 UPSERT_ENTITY_SQL = """
 INSERT INTO entities (
-    type, canonical_name, normalized_name, aliases_json, attributes_json, first_seen_year, last_seen_year, updated_at
+    type, canonical_name, normalized_name, base_normalized_name, aliases_json, attributes_json, first_seen_year, last_seen_year, updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 ON CONFLICT(type, normalized_name) DO UPDATE SET
     canonical_name = excluded.canonical_name,
+    base_normalized_name = excluded.base_normalized_name,
     aliases_json = excluded.aliases_json,
     attributes_json = excluded.attributes_json,
     first_seen_year = COALESCE(entities.first_seen_year, excluded.first_seen_year),
@@ -78,21 +79,30 @@ SELECT
     e.type,
     e.canonical_name,
     e.normalized_name,
+    e.base_normalized_name,
     e.aliases_json,
+    e.attributes_json,
+    (
+        SELECT er.review_status
+        FROM entity_identity_reviews er
+        WHERE er.entity_id = e.id
+        ORDER BY er.id DESC
+        LIMIT 1
+    ) AS identity_review_status,
     COUNT(DISTINCT m.id) AS mentions,
     MIN(p.ano) AS first_year,
     MAX(p.ano) AS last_year
 FROM entities e
 LEFT JOIN entity_mentions m ON m.entity_id = e.id
 LEFT JOIN pages p ON p.id = m.page_id
-WHERE e.normalized_name LIKE ? OR e.canonical_name LIKE ?
+WHERE e.base_normalized_name LIKE ? OR e.canonical_name LIKE ? OR e.aliases_json LIKE ?
 GROUP BY e.id
 ORDER BY mentions DESC, e.canonical_name ASC
 LIMIT ?
 """
 
 GET_ENTITY_SQL = """
-SELECT id, type, canonical_name, normalized_name, aliases_json, attributes_json, first_seen_year, last_seen_year
+SELECT id, type, canonical_name, normalized_name, base_normalized_name, aliases_json, attributes_json, first_seen_year, last_seen_year
 FROM entities
 WHERE id = ?
 """
@@ -146,4 +156,43 @@ GET_PAGE_SQL = """
 SELECT id, bib, pagina, jornal, ano, edicao, text_path, image_path
 FROM pages
 WHERE bib = ? AND pagina = ?
+"""
+
+INSERT_RELATION_REVIEW_SQL = """
+INSERT INTO relation_reviews (relation_id, review_status, reviewer, note)
+VALUES (?, ?, ?, ?)
+"""
+
+GET_RELATION_REVIEW_SQL = """
+SELECT relation_id, review_status, reviewer, note, created_at
+FROM relation_reviews
+WHERE relation_id = ?
+ORDER BY id DESC
+LIMIT 1
+"""
+
+INSERT_ENTITY_IDENTITY_REVIEW_SQL = """
+INSERT INTO entity_identity_reviews (entity_id, review_status, reviewer, note)
+VALUES (?, ?, ?, ?)
+"""
+
+GET_ENTITY_IDENTITY_REVIEW_SQL = """
+SELECT entity_id, review_status, reviewer, note, created_at
+FROM entity_identity_reviews
+WHERE entity_id = ?
+ORDER BY id DESC
+LIMIT 1
+"""
+
+INSERT_ENTITY_MERGE_REVIEW_SQL = """
+INSERT INTO entity_merge_reviews (source_entity_id, target_entity_id, review_status, reviewer, note)
+VALUES (?, ?, ?, ?, ?)
+"""
+
+GET_ENTITY_MERGE_REVIEW_SQL = """
+SELECT source_entity_id, target_entity_id, review_status, reviewer, note, created_at
+FROM entity_merge_reviews
+WHERE source_entity_id = ? AND target_entity_id = ?
+ORDER BY id DESC
+LIMIT 1
 """

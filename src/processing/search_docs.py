@@ -89,8 +89,17 @@ def enrich_metadata(metadata: dict) -> dict:
     bib = enriched.get("bib")
     acervo = load_acervo_cache().get(bib, {}) if bib else {}
     if acervo:
-        enriched.setdefault("jornal", acervo.get("nome"))
-        enriched.setdefault("periodico", acervo.get("nome"))
+        current_jornal = str(enriched.get("jornal") or "").strip()
+        current_periodico = str(enriched.get("periodico") or "").strip()
+        generic = {"", "?", f"Acervo {bib}"}
+        if current_jornal in generic:
+            enriched["jornal"] = acervo.get("nome")
+        else:
+            enriched.setdefault("jornal", acervo.get("nome"))
+        if current_periodico in generic:
+            enriched["periodico"] = acervo.get("nome")
+        else:
+            enriched.setdefault("periodico", acervo.get("nome"))
     return enriched
 
 

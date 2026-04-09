@@ -15,6 +15,21 @@ bench = importlib.import_module("src.benchmark_ocr")
 
 
 class BenchmarkOCRTests(unittest.TestCase):
+    def test_historiographic_score_prefers_structured_text(self):
+        noisy = "5 bb AAA eo TAP NT TAS a eso So CSS SO 6 E Ba DA"
+        structured = (
+            "DIARIO DE PERNAMBUCO\n\n"
+            "HOJE SEGUNDA FEIRA 7 DE NOVEMBRO DE 1825\n\n"
+            "João Affonso Botelho compareceu ao acto official."
+        )
+
+        noisy_score = bench.score_historiographic_quality(noisy)
+        structured_score = bench.score_historiographic_quality(structured)
+
+        self.assertGreater(structured_score["historiographic_score"], noisy_score["historiographic_score"])
+        self.assertGreater(structured_score["named_entity_ratio"], noisy_score["named_entity_ratio"])
+        self.assertTrue(structured_score["date_signal"])
+
     def test_run_benchmark_writes_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -44,6 +59,10 @@ class BenchmarkOCRTests(unittest.TestCase):
             self.assertTrue(summary_file.exists())
             data = json.loads(summary_file.read_text(encoding="utf-8"))
             self.assertEqual(len(data["results"]), 3)
+            adaptive = next(item for item in data["results"] if item["label"] == "ocr-adaptativo")
+            self.assertIn("historiographic_score", adaptive)
+            self.assertIn("operational_bad_page_score", adaptive)
+            self.assertIn(adaptive["recommendation"], {"manter", "revisar", "reprocessar"})
 
 
 if __name__ == "__main__":

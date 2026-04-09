@@ -1,34 +1,27 @@
 from __future__ import annotations
 
-"""Correção pós-OCR usando Claude Opus 4.6 via Claude Code CLI.
+"""Correção pós-OCR usando a API Anthropic.
 
-Usa a sessão autenticada do Claude Code Max (assinatura flat-rate),
-então não há custo variável por chamada.
-
-Uso:
-    from src.llm_correcao_claude import corrigir_texto
-    texto_bom = corrigir_texto(texto_ocr)
+Mantém o provider ``claude`` estável no CLI do projeto, mas evita depender
+de sessão autenticada do Claude Code CLI.
 """
 
 import logging
 import os
-import subprocess
-import time
 from pathlib import Path
+
+from anthropic import Anthropic
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-def _load_api_key() -> str | None:
-    """Carrega ANTHROPIC_API_KEY do .env ou env vars."""
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if key:
-        return key
-    env_file = Path(__file__).parent.parent / ".env"
-    if env_file.exists():
-        for line in env_file.read_text().splitlines():
-            if line.startswith("ANTHROPIC_API_KEY="):
-                return line.split("=", 1)[1].strip()
-    return None
+MODEL_ALIASES = {
+    "opus": "claude-opus-4-1-20250805",
+    "sonnet": "claude-sonnet-4-20250514",
+    "haiku": "claude-3-5-haiku-20241022",
+}
 
 SYSTEM_PROMPT = """Você é especialista em transcrição de jornais históricos brasileiros do século XIX.
 
@@ -43,63 +36,78 @@ REGRAS CRÍTICAS:
 6. Remova separadores de coluna (|, ])
 7. Retorne APENAS o texto corrigido, sem explicações, sem cortar conteúdo"""
 
+_client: Anthropic | None = None
+
+
+def _load_api_key() -> str | None:
+    """Carrega ANTHROPIC_API_KEY do ambiente ou do .env do projeto."""
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if key:
+        return key
+
+    env_file = Path(__file__).resolve().parents[2] / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if line.startswith("ANTHROPIC_API_KEY="):
+                return line.split("=", 1)[1].strip()
+    return None
+
+
+def _resolve_model(model: str) -> str:
+    return MODEL_ALIASES.get(model, model)
+
+
+def _get_client() -> Anthropic:
+    global _client
+    if _client is None:
+        api_key = _load_api_key()
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY não encontrada para o provider claude")
+        _client = Anthropic(api_key=api_key)
+    return _client
+
+
+def _extract_text_block(response) -> str:
+    parts: list[str] = []
+    for block in getattr(response, "content", []):
+        text = getattr(block, "text", None)
+        if text:
+            parts.append(text)
+    return "\n".join(parts).strip()
+
 
 def corrigir_texto(texto: str, model: str = "opus", timeout: int = 180) -> str | None:
-    """Corrige texto OCR via Claude CLI.
-
-    Args:
-        texto: texto OCR a corrigir
-        model: "opus", "sonnet" ou "haiku"
-        timeout: timeout em segundos (default 10min)
-
-    Returns:
-        texto corrigido ou None em caso de erro
-    """
+    """Corrige texto OCR via API Anthropic."""
     if not texto or len(texto.strip()) < 20:
         return texto
 
-    prompt = f"{SYSTEM_PROMPT}\n\nTEXTO A CORRIGIR:\n---\n{texto}\n---"
-
     try:
-        cmd = ["claude", "--model", model, "-p", prompt, "--output-format", "text"]
-        env = os.environ.copy()
-        api_key = _load_api_key()
-        if api_key:
-            env["ANTHROPIC_API_KEY"] = api_key
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
+        client = _get_client()
+        response = client.messages.create(
+            model=_resolve_model(model),
+            system=SYSTEM_PROMPT,
+            max_tokens=4096,
+            temperature=0,
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"TEXTO A CORRIGIR:\n---\n{texto}\n---",
+                }
+            ],
             timeout=timeout,
-            env=env,
         )
-        if result.returncode != 0:
-            logger.error(f"Claude CLI falhou: {result.stderr[:500]}")
-            return None
-        corrigido = result.stdout.strip()
+        corrigido = _extract_text_block(response)
         if not corrigido:
-            logger.warning("Claude CLI retornou vazio")
+            logger.warning("Anthropic retornou resposta vazia")
             return None
         return corrigido
-    except subprocess.TimeoutExpired:
-        logger.error(f"Claude CLI timeout ({timeout}s)")
-        return None
-    except Exception as e:
-        logger.error(f"Erro Claude CLI: {e}")
+    except Exception as exc:
+        logger.error("Erro na correção Anthropic: %s", exc)
         return None
 
 
 def corrigir_arquivo(txt_path: Path, model: str = "opus", force: bool = False) -> bool:
-    """Corrige um arquivo .txt salvando resultado em .txt_corrigido.
-
-    Args:
-        txt_path: caminho do texto original
-        model: modelo Claude a usar
-        force: reprocessar mesmo se já existe
-
-    Returns:
-        True se corrigiu com sucesso
-    """
+    """Corrige um arquivo .txt salvando resultado em .txt_corrigido."""
     out_path = txt_path.parent / txt_path.name.replace(".txt", "_corrigido.txt")
 
     if out_path.exists() and not force:
@@ -107,51 +115,49 @@ def corrigir_arquivo(txt_path: Path, model: str = "opus", force: bool = False) -
 
     try:
         original = txt_path.read_text(encoding="utf-8")
-    except Exception as e:
-        logger.error(f"Erro lendo {txt_path}: {e}")
+    except Exception as exc:
+        logger.error("Erro lendo %s: %s", txt_path, exc)
         return False
 
-    # Pular páginas com OCR muito ruim (< 30% palavras reais de 3+ letras)
     words = original.split()
     if words:
         real_words = [w for w in words if len(w) >= 3 and any(c.isalpha() for c in w)]
         ratio = len(real_words) / len(words)
         if ratio < 0.4 or len(real_words) < 15:
-            logger.warning(f"OCR ilegível em {txt_path.name} ({ratio:.0%} palavras reais), pulando")
-            out_path.write_text(original, encoding="utf-8")  # salva original como corrigido
+            logger.warning("OCR ilegível em %s (%.0f%% palavras reais), pulando", txt_path.name, ratio * 100)
+            out_path.write_text(original, encoding="utf-8")
             return True
 
-    # Para textos muito grandes, dividir em partes
     if len(original) > 15000:
         partes = _dividir_texto(original, 12000)
         corrigidos = []
-        for i, p in enumerate(partes):
-            c = corrigir_texto(p, model=model)
-            if c is None:
-                logger.warning(f"Parte {i+1}/{len(partes)} falhou, usando original")
-                c = p
-            corrigidos.append(c)
-        corrigido = "\n\n".join(corrigidos)
+        for indice, parte in enumerate(partes, start=1):
+            corrigido = corrigir_texto(parte, model=model)
+            if corrigido is None:
+                logger.warning("Parte %s/%s falhou, usando original", indice, len(partes))
+                corrigido = parte
+            corrigidos.append(corrigido)
+        final = "\n\n".join(corrigidos)
     else:
-        corrigido = corrigir_texto(original, model=model)
-        if corrigido is None:
+        final = corrigir_texto(original, model=model)
+        if final is None:
             return False
 
-    out_path.write_text(corrigido, encoding="utf-8")
+    out_path.write_text(final, encoding="utf-8")
     return True
 
 
 def _dividir_texto(texto: str, max_chars: int) -> list[str]:
     """Divide texto em partes respeitando parágrafos."""
     paragrafos = texto.split("\n\n")
-    partes = []
+    partes: list[str] = []
     atual = ""
-    for p in paragrafos:
-        if len(atual) + len(p) > max_chars and atual:
+    for paragrafo in paragrafos:
+        if len(atual) + len(paragrafo) > max_chars and atual:
             partes.append(atual.strip())
-            atual = p
+            atual = paragrafo
         else:
-            atual += "\n\n" + p if atual else p
+            atual += "\n\n" + paragrafo if atual else paragrafo
     if atual.strip():
         partes.append(atual.strip())
     return partes if partes else [texto]

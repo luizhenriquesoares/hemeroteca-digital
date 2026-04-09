@@ -45,9 +45,11 @@ from src.scraping.hires_progress import (
 from src.scraping.hires_docreader import (
     captcha_visivel as _captcha_visivel_impl,
     fechar_dialog as _fechar_dialog_impl,
+    get_cache_url as _get_cache_url_impl,
     get_cookie_str as _get_cookie_str_impl,
     get_page_metadata as _get_page_metadata_impl,
     proxima_pagina as _proxima_pagina_impl,
+    refresh_hires_view as _refresh_hires_view_impl,
     resolver_captcha as _resolver_captcha_impl,
     setup_acervo as _setup_acervo_impl,
     wait_for_cache_url as _wait_for_cache_url_impl,
@@ -125,64 +127,116 @@ def _detectar_n_colunas(img) -> int:
     return n_cols
 
 
-def _ocr_hires(img_path: Path) -> str:
-    """OCR em imagem hi-res com segmentação automática de colunas."""
-    from PIL import Image, ImageEnhance, ImageFilter
+_HIRES_VARIANTS = [
+    {"name": "balanced",   "threshold": 130, "contrast": 1.8, "sharpness": 2.0, "median": 3, "psm": 6, "n_cols": "auto"},
+    {"name": "lighter",    "threshold": 145, "contrast": 2.2, "sharpness": 2.4, "median": 3, "psm": 6, "n_cols": "auto"},
+    {"name": "darker",     "threshold": 118, "contrast": 1.8, "sharpness": 2.1, "median": 5, "psm": 4, "n_cols": "auto"},
+    {"name": "singlecol",  "threshold": 130, "contrast": 1.9, "sharpness": 2.2, "median": 3, "psm": 4, "n_cols": 1},
+    {"name": "fullpage",   "threshold": 135, "contrast": 2.0, "sharpness": 2.0, "median": 3, "psm": 3, "n_cols": 1},
+]
 
-    img = Image.open(img_path).convert("L")
 
-    img = img.filter(ImageFilter.MedianFilter(3))
-    img = ImageEnhance.Contrast(img).enhance(1.8)
-    img = ImageEnhance.Sharpness(img).enhance(2.0)
-    img = img.point(lambda p: 255 if p > 130 else 0)
+def _ocr_single_variant(img_gray, variant: dict) -> str:
+    """Roda OCR com uma configuração específica."""
+    from PIL import ImageEnhance, ImageFilter
+
+    img = img_gray.copy()
+    img = img.filter(ImageFilter.MedianFilter(variant["median"]))
+    img = ImageEnhance.Contrast(img).enhance(variant["contrast"])
+    img = ImageEnhance.Sharpness(img).enhance(variant["sharpness"])
+    img = img.point(lambda p: 255 if p > variant["threshold"] else 0)
 
     w, h = img.size
     margin = int(w * 0.02)
     header_end = int(h * 0.18)
     footer_start = int(h * 0.96)
+    psm = variant["psm"]
 
-    n_cols = _detectar_n_colunas(img)
+    # Determinar colunas
+    n_cols_cfg = variant.get("n_cols", "auto")
+    if n_cols_cfg == "auto":
+        n_cols = _detectar_n_colunas(img)
+    else:
+        n_cols = int(n_cols_cfg)
+
     textos = []
 
+    # Header (título do jornal)
     if header_end > 50:
         header = img.crop((margin, 0, w - margin, header_end))
         t = tesserocr.image_to_text(
-            header,
-            lang=TESSERACT_LANG,
-            path=str(TESSDATA_DIR),
-            psm=6,
+            header, lang=TESSERACT_LANG, path=str(TESSDATA_DIR), psm=6,
         )
         if t.strip():
             textos.append(t.strip())
 
-    col_w = (w - 2 * margin) // n_cols
-    for i in range(n_cols):
-        x1 = margin + i * col_w
-        x2 = margin + (i + 1) * col_w
-        col = img.crop((x1, header_end, x2, footer_start))
+    # Body por colunas
+    if n_cols <= 1:
+        body = img.crop((margin, header_end, w - margin, footer_start))
         t = tesserocr.image_to_text(
-            col,
-            lang=TESSERACT_LANG,
-            path=str(TESSDATA_DIR),
-            psm=6,
+            body, lang=TESSERACT_LANG, path=str(TESSDATA_DIR), psm=psm,
         )
         if t.strip():
             textos.append(t.strip())
+    else:
+        col_w = (w - 2 * margin) // n_cols
+        for i in range(n_cols):
+            x1 = margin + i * col_w
+            x2 = margin + (i + 1) * col_w
+            col = img.crop((x1, header_end, x2, footer_start))
+            t = tesserocr.image_to_text(
+                col, lang=TESSERACT_LANG, path=str(TESSDATA_DIR), psm=psm,
+            )
+            if t.strip():
+                textos.append(t.strip())
 
     texto = "\n\n".join(textos)
+    return _limpar_ocr(texto)
 
+
+def _limpar_ocr(texto: str) -> str:
+    """Limpa texto OCR removendo linhas com pouco conteúdo."""
     lines = texto.split("\n")
     cleaned = []
     for line in lines:
         stripped = line.strip()
         if len(re.findall(r"[a-zA-ZÀ-ú0-9]", stripped)) >= 2:
             cleaned.append(stripped)
-
     texto = "\n".join(cleaned)
     texto = re.sub(r"\n{3,}", "\n\n", texto)
     texto = re.sub(r" {3,}", " ", texto)
-
     return texto.strip()
+
+
+def _ocr_hires(img_path: Path) -> str:
+    """OCR multi-variant: roda múltiplas configs e seleciona a melhor."""
+    from PIL import Image
+    from src.processing.ocr_quality import score_ocr_text
+
+    img_gray = Image.open(img_path).convert("L")
+
+    best_text = ""
+    best_score = -1.0
+    best_variant = ""
+
+    for variant in _HIRES_VARIANTS:
+        try:
+            texto = _ocr_single_variant(img_gray, variant)
+            if not texto:
+                continue
+            metrics = score_ocr_text(texto)
+            score = metrics["score"]
+            if score > best_score:
+                best_score = score
+                best_text = texto
+                best_variant = variant["name"]
+        except Exception as e:
+            logger.debug(f"Variante {variant['name']} falhou: {e}")
+
+    if best_variant:
+        logger.debug(f"OCR best variant: {best_variant} (score={best_score:.3f})")
+
+    return best_text
 
 
 # ── Estado persistente ───────────────────────────────────────────────
@@ -250,8 +304,29 @@ def _get_cookie_str(driver):
     return _get_cookie_str_impl(driver)
 
 
+def _get_cache_url(driver):
+    return _get_cache_url_impl(driver)
+
+
+def _refresh_hires_view(driver, page_num: int | None = None):
+    _refresh_hires_view_impl(driver, hires_size=HIRES_SIZE, page_num=page_num)
+
+
 def _get_page_metadata(driver, bib: str, nome: str, global_page: int) -> dict:
     return _get_page_metadata_impl(driver, bib, nome, global_page)
+
+
+def _get_request_context(driver) -> tuple[str, str, str]:
+    cookie_str = _get_cookie_str(driver)
+    try:
+        ua = driver.execute_script("return navigator.userAgent")
+    except Exception:
+        ua = ""
+    try:
+        referer = driver.current_url
+    except Exception:
+        referer = HDB_DOCREADER_URL
+    return cookie_str, ua, referer
 
 
 # ── Processamento do acervo ──────────────────────────────────────────
@@ -323,9 +398,6 @@ def _process_page_with_retry(
     txt_path: Path,
     meta_path: Path,
     img_dir: Path | None,
-    cookie_str: str,
-    ua: str,
-    referer: str,
     prev_src: str | None,
     page_metadata: dict | None,
 ) -> tuple[bool, str | None, str]:
@@ -336,14 +408,41 @@ def _process_page_with_retry(
     for attempt in range(1, PAGE_RETRIES + 1):
         tmp_path = None
         try:
+            if _captcha_visivel(driver):
+                logger.info("%s p%s: CAPTCHA visível antes do hi-res; resolvendo.", bib, global_page)
+                if not _resolver_captcha(driver):
+                    raise RuntimeError("captcha_nao_resolvido")
+
             driver.execute_script(
-                f"document.getElementById('HiddenSize').value = '{HIRES_SIZE}';"
+                """
+                var size = document.getElementById('HiddenSize');
+                if (size) size.value = arguments[0];
+                """,
+                HIRES_SIZE,
             )
 
-            src = _wait_for_cache_url(driver, old_src=prev_src, timeout=15)
+            src = _wait_for_cache_url_impl(
+                driver,
+                old_src=prev_src,
+                timeout=12,
+                captcha_visible_fn=_captcha_visivel,
+                captcha_resolve_fn=lambda: _resolver_captcha(driver),
+                refresh_fn=lambda: _refresh_hires_view(driver, global_page),
+            )
+            if not src:
+                _refresh_hires_view(driver, global_page)
+                src = _wait_for_cache_url_impl(
+                    driver,
+                    old_src=prev_src,
+                    timeout=20,
+                    captcha_visible_fn=_captcha_visivel,
+                    captcha_resolve_fn=lambda: _resolver_captcha(driver),
+                    refresh_fn=lambda: _refresh_hires_view(driver, global_page),
+                )
             if not src:
                 raise RuntimeError("cache_url_nao_carregou")
 
+            cookie_str, ua, referer = _get_request_context(driver)
             req = urllib.request.Request(src)
             req.add_header("Cookie", cookie_str)
             req.add_header("User-Agent", ua)
@@ -390,7 +489,7 @@ def _process_page_with_retry(
                 f"{bib} p{global_page}: falha na tentativa {attempt}/{PAGE_RETRIES}: {reason}"
             )
             if attempt < PAGE_RETRIES:
-                time.sleep(PAGE_RETRY_SLEEP)
+                time.sleep(PAGE_RETRY_SLEEP * attempt)
         finally:
             try:
                 if tmp_path:
@@ -430,10 +529,6 @@ def _processar_com_driver(
             "failed_pages": ["setup"],
             "complete": False,
         }
-
-    cookie_str = _get_cookie_str(driver)
-    ua = driver.execute_script("return navigator.userAgent")
-    referer = driver.current_url
 
     processadas = 0
     skipped = 0
@@ -475,9 +570,6 @@ def _processar_com_driver(
             txt_path=txt_path,
             meta_path=meta_path,
             img_dir=img_dir,
-            cookie_str=cookie_str,
-            ua=ua,
-            referer=referer,
             prev_src=prev_src,
             page_metadata=_get_page_metadata(driver, bib, nome, global_page),
         )
@@ -502,10 +594,8 @@ def _processar_com_driver(
                 f"(p{global_page}/{end_page or '?'}) | "
                 f"{rate:.1f} pg/s | ETA {eta/60:.0f}min"
             )
-            cookie_str = _get_cookie_str(driver)
             if _captcha_visivel(driver):
                 _resolver_captcha(driver)
-                cookie_str = _get_cookie_str(driver)
 
         before_page = global_page
         _proxima_pagina(driver)
@@ -584,6 +674,7 @@ def processar_todos_hires(
         processar_com_driver_fn=_processar_com_driver,
         processar_acervo_paralelo_fn=_processar_acervo_paralelo_impl,
         mark_done_fn=_mark_done,
+        set_bib_stats_fn=_set_bib_stats,
         unmark_done_fn=_unmark_done,
         create_driver_fn=create_driver,
     )
@@ -601,5 +692,6 @@ def _processar_acervo_paralelo(acervo, workers, headless, force, max_pages, keep
         processar_com_driver_fn=_processar_com_driver,
         load_progress_fn=_load_progress,
         mark_done_fn=_mark_done,
+        set_bib_stats_fn=_set_bib_stats,
         create_driver_fn=create_driver,
     )

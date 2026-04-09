@@ -1,11 +1,12 @@
 """Módulo de indexação vetorial: indexa chunks no ChromaDB para busca RAG."""
 
 import logging
+import os
 
 import chromadb
 from chromadb.config import Settings
 
-from src.config import CHROMA_DIR, CHROMA_COLLECTION, EMBEDDING_MODEL
+from src.config import CHROMA_DIR, CHROMA_COLLECTION, EMBEDDING_MODEL, EMBEDDING_PROVIDER
 from src.processing.chunker import carregar_chunks
 
 logger = logging.getLogger(__name__)
@@ -25,15 +26,27 @@ def get_client() -> chromadb.ClientAPI:
     return _client
 
 
+def _create_embedding_fn():
+    """Cria a função de embedding baseada no provider configurado."""
+    if EMBEDDING_PROVIDER == "openai":
+        from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+        return OpenAIEmbeddingFunction(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            model_name=EMBEDDING_MODEL,
+        )
+    else:
+        from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+        return SentenceTransformerEmbeddingFunction(
+            model_name=EMBEDDING_MODEL,
+        )
+
+
 def get_collection(name: str = CHROMA_COLLECTION) -> chromadb.Collection:
-    """Retorna (ou cria) a coleção ChromaDB com embedding multilíngue."""
+    """Retorna (ou cria) a coleção ChromaDB."""
     global _collection
     if _collection is None:
         client = get_client()
-        from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
-        embedding_fn = SentenceTransformerEmbeddingFunction(
-            model_name=EMBEDDING_MODEL,
-        )
+        embedding_fn = _create_embedding_fn()
         _collection = client.get_or_create_collection(
             name=name,
             embedding_function=embedding_fn,
@@ -88,6 +101,32 @@ def indexar_acervo(bib: str, batch_size: int = 100) -> int:
 
     logger.info(f"Acervo {bib}: {indexed} novos chunks indexados (total: {collection.count()})")
     return indexed
+
+
+def limpar_indexacao_acervo(bib: str, batch_size: int = 500) -> int:
+    """Remove do ChromaDB todos os chunks indexados de um acervo."""
+    collection = get_collection()
+    deleted = 0
+
+    while True:
+        result = collection.get(where={"bib": bib}, limit=batch_size, include=[])
+        ids = result.get("ids") or []
+        if not ids:
+            break
+
+        collection.delete(ids=ids)
+        deleted += len(ids)
+        logger.debug("Acervo %s: %s chunks removidos do índice", bib, deleted)
+
+    logger.info(f"Acervo {bib}: {deleted} chunks removidos do índice")
+    return deleted
+
+
+def reindexar_acervo(bib: str, batch_size: int = 100) -> dict[str, int]:
+    """Refaz a indexação de um acervo removendo embeddings antigos primeiro."""
+    deleted = limpar_indexacao_acervo(bib, batch_size=max(batch_size, 500))
+    indexed = indexar_acervo(bib, batch_size=batch_size)
+    return {"deleted": deleted, "indexed": indexed}
 
 
 def indexar_todos(batch_size: int = 100) -> dict:

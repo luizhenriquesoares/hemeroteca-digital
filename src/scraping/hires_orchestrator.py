@@ -38,6 +38,7 @@ def processar_acervo_paralelo(
     processar_com_driver_fn,
     load_progress_fn,
     mark_done_fn,
+    set_bib_stats_fn=None,
     create_driver_fn,
 ):
     bib_code = acervo["bib"]
@@ -108,9 +109,24 @@ def processar_acervo_paralelo(
         thread.join()
 
     total_processed = sum(result["processed"] for result in results if result)
+    total_skipped = sum(result.get("skipped", 0) for result in results if result)
     progress = load_progress_fn()
     all_failed_pages = sorted(set(progress["failed_pages"].get(bib_code, [])))
     complete = len(all_failed_pages) == 0 and total_processed > 0
+
+    if set_bib_stats_fn:
+        set_bib_stats_fn(
+            bib_code,
+            {
+                "processed": total_processed,
+                "skipped": total_skipped,
+                "failed_pages": all_failed_pages,
+                "complete": complete,
+                "workers": workers,
+                "running": False,
+                "total_expected": total_pages,
+            },
+        )
 
     if complete:
         mark_done_fn(bib_code)
@@ -131,6 +147,7 @@ def processar_todos_hires(
     processar_com_driver_fn,
     processar_acervo_paralelo_fn,
     mark_done_fn,
+    set_bib_stats_fn=None,
     unmark_done_fn,
     create_driver_fn,
 ):
@@ -178,6 +195,7 @@ def processar_todos_hires(
             processar_com_driver_fn=processar_com_driver_fn,
             load_progress_fn=load_progress_fn,
             mark_done_fn=mark_done_fn,
+            set_bib_stats_fn=set_bib_stats_fn,
             create_driver_fn=create_driver_fn,
         )
 

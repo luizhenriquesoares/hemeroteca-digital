@@ -38,10 +38,15 @@ INSTITUTION_MARKERS = {
     "camara", "câmara", "alfandega", "alfândega", "mesa", "consulado",
     "secretaria", "thezouro", "thesouro", "igreja", "tribunal", "junta",
     "prefeitura", "governo", "presidencia", "presidência", "typographia",
+    "tipografia",
 }
 
 PLACE_PREPOSITIONS = {"em", "na", "no", "para", "de"}
-PLACE_STOPWORDS = {"rua", "villa", "vila", "cidade", "provincia", "província", "bairro"}
+PLACE_STOPWORDS = {
+    "rua", "villa", "vila", "cidade", "provincia", "província", "bairro",
+    "sessao", "sessão", "tipografia", "typographia", "diario", "boa",
+    "comp", "dito", "dita", "art", "anno",
+}
 
 ROLE_TITLES = {
     "capitao", "major", "tenente", "coronel", "padre", "vigario", "doutor",
@@ -183,6 +188,10 @@ def _extract_places(text: str) -> dict[tuple[str, str], ExtractedEntity]:
         if not tokens:
             continue
         if tokens[0] in PLACE_STOPWORDS:
+            continue
+        # Rejeitar single-token genérico — lugar precisa de pelo menos 2 tokens
+        # ou ser um topônimo reconhecível (> 4 chars)
+        if len(tokens) == 1 and len(tokens[0]) <= 4:
             continue
         key = ("place", normalized)
         entity = ExtractedEntity(

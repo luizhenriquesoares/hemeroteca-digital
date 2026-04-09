@@ -11,6 +11,42 @@ from src.config import TEXT_DIR, CHUNKS_DIR, CHUNK_SIZE, CHUNK_OVERLAP
 logger = logging.getLogger(__name__)
 
 
+def limpar_chunks_acervo(bib: str) -> dict[str, int]:
+    """Remove os artefatos de chunking de um acervo específico."""
+    chunk_dir = CHUNKS_DIR / bib
+    if not chunk_dir.exists():
+        return {"files_removed": 0, "chunks_removed": 0}
+
+    files = sorted(path for path in chunk_dir.rglob("*") if path.is_file())
+    chunk_file = chunk_dir / "chunks.jsonl"
+    chunks_removed = 0
+
+    if chunk_file.exists():
+        with open(chunk_file, encoding="utf-8") as f:
+            chunks_removed = sum(1 for _ in f)
+
+    for path in files:
+        path.unlink()
+
+    nested_dirs = sorted(
+        (path for path in chunk_dir.rglob("*") if path.is_dir()),
+        reverse=True,
+    )
+    for path in nested_dirs:
+        path.rmdir()
+
+    if chunk_dir.exists():
+        chunk_dir.rmdir()
+
+    logger.info(
+        "Acervo %s: %s arquivo(s) de chunk removidos (%s chunks antigos)",
+        bib,
+        len(files),
+        chunks_removed,
+    )
+    return {"files_removed": len(files), "chunks_removed": chunks_removed}
+
+
 def criar_chunks_acervo(bib: str, force: bool = False) -> int:
     """
     Divide os textos de um acervo em chunks para RAG.

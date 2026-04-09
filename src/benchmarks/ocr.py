@@ -27,7 +27,13 @@ class OCRBenchmarkResult:
     valid_word_ratio: float
     odd_char_ratio: float
     short_line_ratio: float
+    historiographic_score: float
+    named_entity_ratio: float
+    heading_ratio: float
+    date_signal: bool
     similarity_to_corrected: float | None
+    operational_bad_page_score: float
+    recommendation: str
     output_path: str
     variant: str = ""
     error: str = ""
@@ -39,6 +45,86 @@ def _similarity(a: str, b: str) -> float:
     return round(difflib.SequenceMatcher(a=a, b=b).ratio(), 4)
 
 
+def _count_named_entity_signals(text: str) -> int:
+    pattern = re.compile(
+        r"\b(?:D\.|Dr\.?|Sr\.?|Sra\.|[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]+)"
+        r"(?:\s+(?:(?:de|da|do|dos|das|d['’]|e)\s+)?[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]+){1,3}\b"
+    )
+    return len(pattern.findall(text or ""))
+
+
+def _heading_ratio(text: str) -> float:
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    if not lines:
+        return 0.0
+    heading_like = 0
+    for line in lines[:12]:
+        alpha = re.sub(r"[^A-Za-zÀ-ÿ]", "", line)
+        if alpha and alpha.upper() == alpha and len(line.split()) <= 8:
+            heading_like += 1
+    return round(min(1.0, heading_like / max(1, min(len(lines), 12))), 4)
+
+
+def _has_date_signal(text: str) -> bool:
+    patterns = [
+        r"\b\d{1,2}\s+de\s+[A-Za-zÀ-ÿ]+\s+de\s+\d{4}\b",
+        r"\banno\s+de\s+\d{4}\b",
+        r"\bhoje\s+[A-Za-zÀ-ÿ]+\b",
+    ]
+    normalized = text.lower()
+    return any(re.search(pattern, normalized) for pattern in patterns)
+
+
+def score_historiographic_quality(text: str, corrected_text: str = "") -> dict:
+    metrics = _score_ocr_text(text)
+    words = max(1, len((text or "").split()))
+    named_entity_ratio = round(min(1.0, _count_named_entity_signals(text) / max(2, words / 18)), 4)
+    heading_ratio = _heading_ratio(text)
+    date_signal = _has_date_signal(text)
+    similarity = _similarity(text, corrected_text) if corrected_text else None
+
+    score = (
+        metrics["valid_word_ratio"] * 0.35
+        + (1 - metrics["odd_char_ratio"]) * 0.20
+        + (1 - metrics["short_line_ratio"]) * 0.10
+        + named_entity_ratio * 0.15
+        + heading_ratio * 0.10
+        + (0.10 if date_signal else 0.0)
+    )
+    if similarity is not None:
+        score = score * 0.8 + similarity * 0.2
+    score = round(max(0.0, min(score, 1.0)), 4)
+
+    bad_page_score = (
+        (1 - metrics["valid_word_ratio"]) * 0.35
+        + metrics["odd_char_ratio"] * 0.30
+        + metrics["short_line_ratio"] * 0.20
+        + (0.08 if not date_signal else 0.0)
+        + (0.07 if named_entity_ratio < 0.15 else 0.0)
+    )
+    if similarity is not None:
+        bad_page_score += (1 - similarity) * 0.15
+    bad_page_score = round(max(0.0, min(bad_page_score, 1.0)), 4)
+
+    if bad_page_score >= 0.7:
+        recommendation = "reprocessar"
+    elif bad_page_score >= 0.4:
+        recommendation = "revisar"
+    else:
+        recommendation = "manter"
+
+    return {
+        **metrics,
+        "historiographic_score": score,
+        "named_entity_ratio": named_entity_ratio,
+        "heading_ratio": heading_ratio,
+        "date_signal": date_signal,
+        "similarity_to_corrected": similarity,
+        "operational_bad_page_score": bad_page_score,
+        "recommendation": recommendation,
+    }
+
+
 def _build_result(
     *,
     label: str,
@@ -48,7 +134,7 @@ def _build_result(
     corrected_text: str,
     variant: str = "",
 ) -> OCRBenchmarkResult:
-    metrics = _score_ocr_text(text)
+    metrics = score_historiographic_quality(text, corrected_text=corrected_text)
     output_path.write_text(text, encoding="utf-8")
     return OCRBenchmarkResult(
         label=label,
@@ -60,7 +146,13 @@ def _build_result(
         valid_word_ratio=metrics["valid_word_ratio"],
         odd_char_ratio=metrics["odd_char_ratio"],
         short_line_ratio=metrics["short_line_ratio"],
-        similarity_to_corrected=_similarity(text, corrected_text) if corrected_text else None,
+        historiographic_score=metrics["historiographic_score"],
+        named_entity_ratio=metrics["named_entity_ratio"],
+        heading_ratio=metrics["heading_ratio"],
+        date_signal=metrics["date_signal"],
+        similarity_to_corrected=metrics["similarity_to_corrected"],
+        operational_bad_page_score=metrics["operational_bad_page_score"],
+        recommendation=metrics["recommendation"],
         output_path=str(output_path),
         variant=variant,
     )

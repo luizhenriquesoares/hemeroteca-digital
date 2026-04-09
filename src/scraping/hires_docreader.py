@@ -36,17 +36,73 @@ def fechar_dialog(driver) -> None:
         pass
 
 
-def wait_for_cache_url(driver, old_src=None, timeout=20):
-    for _ in range(timeout):
-        src = driver.execute_script(
+def get_cache_url(driver):
+    try:
+        return driver.execute_script(
             """
             var img = document.getElementById('DocumentoImg');
             return (img && img.src && img.src.indexOf('cache') > -1) ? img.src : null;
             """
         )
+    except Exception:
+        return None
+
+
+def refresh_hires_view(driver, *, hires_size: str, page_num: int | None = None) -> None:
+    """Reenvia a requisição da imagem hi-res da página atual."""
+    try:
+        driver.execute_script(
+            """
+            var size = document.getElementById('HiddenSize');
+            if (size) size.value = arguments[0];
+
+            var pagFis = document.getElementById('hPagFis');
+            if (pagFis && arguments[1] !== null) pagFis.value = String(arguments[1]);
+
+            var btn = document.getElementById('CarregaImagemHiddenButton');
+            if (btn) btn.click();
+            """,
+            hires_size,
+            page_num if page_num is not None else None,
+        )
+        from src.scraping.scraper_support import aguardar_carregamento
+
+        time.sleep(0.5)
+        aguardar_carregamento(driver, timeout=15)
+    except Exception as exc:
+        logger.debug("Falha ao forçar recarga hi-res: %s", exc)
+
+
+def wait_for_cache_url(
+    driver,
+    old_src=None,
+    timeout=20,
+    *,
+    captcha_visible_fn=None,
+    captcha_resolve_fn=None,
+    refresh_fn=None,
+    poll_interval: float = 0.5,
+):
+    deadline = time.time() + timeout
+    refresh_done = False
+
+    while time.time() < deadline:
+        if captcha_visible_fn and captcha_visible_fn(driver):
+            logger.info("CAPTCHA visível durante espera da imagem; tentando resolver.")
+            if captcha_resolve_fn and not captcha_resolve_fn():
+                return None
+            refresh_done = False
+
+        src = get_cache_url(driver)
         if src and src != old_src:
             return src
-        time.sleep(1)
+
+        remaining = deadline - time.time()
+        if refresh_fn and not refresh_done and remaining <= timeout / 2:
+            refresh_fn()
+            refresh_done = True
+
+        time.sleep(poll_interval)
     return None
 
 
@@ -57,6 +113,9 @@ def proxima_pagina(driver, click_pause: float) -> None:
             "if (btn) btn.click();"
         )
         time.sleep(click_pause)
+        from src.scraping.scraper_support import aguardar_carregamento
+
+        aguardar_carregamento(driver, timeout=15)
         time.sleep(0.5)
     except Exception as exc:
         logger.warning("Erro ao avançar página: %s", exc)
@@ -155,15 +214,16 @@ def setup_acervo(
 
     logger.info("Low-res carregada: %s", low_res_src.split("/")[-1])
 
-    driver.execute_script(
-        f"""
-        document.getElementById('HiddenSize').value = '{hires_size}';
-        document.getElementById('hPagFis').value = '{start_page}';
-        document.getElementById('CarregaImagemHiddenButton').click();
-        """
-    )
+    refresh_hires_view(driver, hires_size=hires_size, page_num=start_page)
 
-    first_src = wait_for_cache_url(driver, old_src=low_res_src, timeout=30)
+    first_src = wait_for_cache_url(
+        driver,
+        old_src=low_res_src,
+        timeout=30,
+        captcha_visible_fn=captcha_visivel,
+        captcha_resolve_fn=lambda: resolver_captcha(driver, captcha_visivel),
+        refresh_fn=lambda: refresh_hires_view(driver, hires_size=hires_size, page_num=start_page),
+    )
     if not first_src:
         logger.error("Imagem hi-res não carregou para %s", bib)
         return low_res_src, None

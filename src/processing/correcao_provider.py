@@ -9,7 +9,7 @@ from src.config import TEXT_DIR
 OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
 OPENAI_MAX_MODEL = "gpt-5"
 CLAUDE_DEFAULT_MODEL = "opus"
-PROVIDERS = ("openai", "claude")
+PROVIDERS = ("openai", "claude", "claude-cli", "claude-api")
 
 
 def list_pending_files(bib: str | None = None, force: bool = False) -> list[Path]:
@@ -44,7 +44,14 @@ def corrigir_arquivo(
             model=model or OPENAI_DEFAULT_MODEL,
             force=force,
         )
-    if provider == "claude":
+    if provider in {"claude", "claude-cli"}:
+        from src.processing.llm_correcao_claude_cli import corrigir_arquivo as corrigir_claude_cli
+        return corrigir_claude_cli(
+            txt_path,
+            model=model or CLAUDE_DEFAULT_MODEL,
+            force=force,
+        )
+    if provider == "claude-api":
         from src.processing.llm_correcao_claude import corrigir_arquivo as corrigir_claude
         return corrigir_claude(
             txt_path,
@@ -63,7 +70,10 @@ def corrigir_texto(
     if provider == "openai":
         from src.processing.llm_correcao import corrigir_texto_ocr
         return corrigir_texto_ocr(texto, model=model or OPENAI_DEFAULT_MODEL)
-    if provider == "claude":
+    if provider in {"claude", "claude-cli"}:
+        from src.processing.llm_correcao_claude_cli import corrigir_texto
+        return corrigir_texto(texto, model=model or CLAUDE_DEFAULT_MODEL)
+    if provider == "claude-api":
         from src.processing.llm_correcao_claude import corrigir_texto
         return corrigir_texto(texto, model=model or CLAUDE_DEFAULT_MODEL)
     raise ValueError(f"Provider inválido: {provider}")

@@ -59,7 +59,69 @@ RELATION_PATTERNS = [
         0.82,
         "probable",
     ),
+    # --- Novos padrões ---
+    (
+        "appointed_to",
+        re.compile(
+            rf"(?P<subject>{NAME_PATTERN})\s*,?\s*(?:nomeado|nomeada|nomeio|eleito|eleita)\s+(?:para\s+)?(?:o\s+cargo\s+de\s+|ao\s+cargo\s+de\s+|para\s+)?(?P<object>[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][^,;.\n]{{3,60}})",
+        ),
+        0.85,
+        "probable",
+    ),
+    (
+        "deceased",
+        re.compile(
+            rf"(?:faleceu|falleceo|falleceu)\s+(?:o|a|os|as)?\s*(?P<subject>{NAME_PATTERN})",
+        ),
+        0.80,
+        "hypothesis",
+    ),
+    (
+        "deceased_after",
+        re.compile(
+            rf"(?P<subject>{NAME_PATTERN})\s*,?\s*(?:faleceu|falleceo|falleceu|falecido|falecida)",
+        ),
+        0.80,
+        "hypothesis",
+    ),
+    (
+        "traveled_to",
+        re.compile(
+            rf"(?P<subject>{NAME_PATTERN})\s*,?\s*(?:embarcou|partiu|chegou|desembarcou)\s+(?:no\s+porto\s+de\s+|para\s+|de\s+|em\s+)(?P<object>[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]+(?:\s+(?:de|do|da)\s+[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]+){{0,2}})",
+        ),
+        0.75,
+        "hypothesis",
+    ),
+    (
+        "signed_by",
+        re.compile(
+            rf"(?:assinado|assignado|firmado)\s+(?:por|pelo|pela)\s+(?P<subject>{NAME_PATTERN})",
+        ),
+        0.78,
+        "hypothesis",
+    ),
 ]
+
+# Padrões que não capturam "object" (deceased, signed_by usam object_literal)
+_NO_OBJECT_PREDICATES = {"deceased", "deceased_after", "signed_by"}
+
+
+_TRUNCATED_RE = re.compile(r"[A-Z][a-z]{0,2}$|[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]{1,3}$")
+
+
+def _looks_truncated(name: str) -> bool:
+    """Detecta nomes que parecem cortados pelo OCR (terminam em fragmento curto)."""
+    parts = name.strip().split()
+    if not parts:
+        return True
+    last = parts[-1]
+    # Último token com 1-3 chars e começa com maiúscula = provavelmente truncado
+    if len(last) <= 3 and last[0].isupper() and len(parts) >= 2:
+        return True
+    # Contém sequências sem sentido (consoantes sem vogais, > 3 chars)
+    if len(last) >= 3 and not re.search(r"[aeiouáàâãéêíóôõú]", last, re.IGNORECASE):
+        return True
+    return False
 
 
 def _find_entity_name(raw_name: str, entities: list[ExtractedEntity]) -> str:
@@ -78,6 +140,8 @@ def extract_relations(text: str, entities: list[ExtractedEntity]) -> list[Extrac
 
     for entity in entities:
         if entity.role:
+            if _looks_truncated(entity.canonical_name):
+                continue
             key = (entity.canonical_name, "holds_role", "", entity.role)
             if key not in seen:
                 seen.add(key)
@@ -95,23 +159,49 @@ def extract_relations(text: str, entities: list[ExtractedEntity]) -> list[Extrac
 
     for predicate, pattern, confidence, status in RELATION_PATTERNS:
         for match in pattern.finditer(text or ""):
-            subject_name = _find_entity_name(match.group("subject"), entities)
+            raw_subject = match.group("subject")
+
+            if _looks_truncated(raw_subject):
+                continue
+            # Rejeitar subjects que começam com preposição (lugar, não pessoa)
+            first_word = raw_subject.strip().split()[0].lower() if raw_subject.strip() else ""
+            if first_word in {"na", "no", "em", "da", "do", "ao", "pela", "pelo"}:
+                continue
+
+            # Padrões sem grupo "object" (deceased, signed_by)
+            has_object = predicate not in _NO_OBJECT_PREDICATES
+            raw_object = ""
+            if has_object:
+                try:
+                    raw_object = match.group("object")
+                except IndexError:
+                    continue
+                if _looks_truncated(raw_object):
+                    continue
+
+            subject_name = _find_entity_name(raw_subject, entities)
             object_entity_name = ""
             object_literal = ""
-            raw_object = match.group("object")
-            if predicate in {"member_of", "resident_of"}:
+
+            # Normalizar deceased_after → deceased
+            effective_predicate = "deceased" if predicate == "deceased_after" else predicate
+
+            if not has_object:
+                # deceased/signed_by: sem objeto, apenas registrar o fato
+                object_literal = effective_predicate.replace("_", " ")
+            elif effective_predicate in {"member_of", "resident_of", "appointed_to", "traveled_to"}:
                 object_literal = raw_object.strip(" ,.;:")
             else:
                 object_entity_name = _find_entity_name(raw_object, entities)
 
-            key = (subject_name, predicate, object_entity_name, object_literal)
-            if key in seen or subject_name == object_entity_name:
+            key = (subject_name, effective_predicate, object_entity_name, object_literal)
+            if key in seen or (object_entity_name and subject_name == object_entity_name):
                 continue
             seen.add(key)
             relations.append(
                 ExtractedRelation(
                     subject_name=subject_name,
-                    predicate=predicate,
+                    predicate=effective_predicate,
                     object_name=object_entity_name,
                     object_literal=object_literal,
                     confidence=confidence,
@@ -122,6 +212,7 @@ def extract_relations(text: str, entities: list[ExtractedEntity]) -> list[Extrac
             )
 
     _append_residence_relations(text, entities, relations, seen)
+    _append_ocr_tolerant_relations(text, entities, relations, seen)
     _append_cooccurrence_relations(entities, relations, seen)
     return relations
 
@@ -163,6 +254,110 @@ def _append_residence_relations(
                     extraction_method="pattern_heuristic",
                 )
             )
+            break
+
+
+def _append_ocr_tolerant_relations(
+    text: str,
+    entities: list[ExtractedEntity],
+    relations: list[ExtractedRelation],
+    seen: set,
+) -> None:
+    """Extrai relações biográficas com padrões tolerantes a OCR degradado.
+
+    Em vez de exigir NAME_PATTERN (maiúscula-minúscula perfeitas), usa as
+    entidades já extraídas como âncora e busca padrões biográficos ao redor.
+    """
+    if not text or not entities:
+        return
+
+    people = [e for e in entities if e.entity_type == "person"]
+    if not people:
+        return
+
+    # Padrões OCR-tolerantes que buscam relação DEPOIS de uma entidade conhecida
+    _ocr_patterns = [
+        # filho/filha de NOME
+        ("child_of", re.compile(
+            r",?\s*filh[oa]\s+(?:leg[ií]tim[oa]\s+)?d[eao]\s+([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][\w\s',\-]{3,50})",
+            re.IGNORECASE,
+        ), 0.88),
+        # viuva de NOME
+        ("widow_of", re.compile(
+            r",?\s*vi[uú]va\s+d[eoa]\s+([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][\w\s',\-]{3,50})",
+            re.IGNORECASE,
+        ), 0.80),
+        # casado/casada com NOME
+        ("spouse_of", re.compile(
+            r",?\s*casad[oa]\s+com\s+([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][\w\s',\-]{3,50})",
+            re.IGNORECASE,
+        ), 0.85),
+        # nomeado para CARGO/FUNCAO
+        ("appointed_to", re.compile(
+            r",?\s*nomead[oa]\s+(?:para\s+)?(?:o\s+cargo\s+d[eao]\s+)?([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][\w\s]{3,50})",
+            re.IGNORECASE,
+        ), 0.82),
+    ]
+
+    for entity in people:
+        if _looks_truncated(entity.canonical_name):
+            continue
+        # Buscar o contexto ao redor de cada menção da entidade
+        for alias in [entity.surface_form, entity.canonical_name]:
+            alias = alias.strip()
+            if not alias or len(alias) < 5:
+                continue
+            # Encontrar posições da entidade no texto
+            search_start = 0
+            while True:
+                pos = text.lower().find(alias.lower(), search_start)
+                if pos == -1:
+                    break
+                search_start = pos + 1
+                # Contexto depois da menção (200 chars)
+                after = text[pos + len(alias):pos + len(alias) + 200]
+
+                for predicate, pattern, confidence in _ocr_patterns:
+                    match = pattern.match(after)
+                    if not match:
+                        continue
+
+                    raw_object = match.group(1).strip(" ,.;:-\n|")
+                    # Limpar: pegar apenas até o primeiro delimitador forte
+                    raw_object = re.split(r"[,;.|\n]", raw_object)[0].strip()
+                    if len(raw_object) < 3 or _looks_truncated(raw_object):
+                        continue
+
+                    if predicate in {"child_of", "widow_of", "spouse_of"}:
+                        object_name = _find_entity_name(raw_object, entities)
+                        object_literal = ""
+                    else:
+                        object_name = ""
+                        object_literal = raw_object
+
+                    key = (entity.canonical_name, predicate, object_name, object_literal)
+                    if key in seen:
+                        continue
+                    if object_name and entity.canonical_name == object_name:
+                        continue
+                    seen.add(key)
+
+                    evidence = text[pos:pos + len(alias) + match.end()].strip()
+                    relations.append(
+                        ExtractedRelation(
+                            subject_name=entity.canonical_name,
+                            predicate=predicate,
+                            object_name=object_name,
+                            object_literal=object_literal,
+                            confidence=confidence,
+                            status="hypothesis",
+                            evidence_quote=evidence[:200],
+                            extraction_method="ocr_tolerant_heuristic",
+                        )
+                    )
+                    break  # Só uma relação por padrão por posição
+
+            # Só usar a primeira alias que produzir resultado
             break
 
 

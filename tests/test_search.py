@@ -86,6 +86,42 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["id"], "x1")
 
+    def test_busca_textual_historica_prioriza_variante_affonso(self):
+        docs = [
+            {
+                "id": "x1",
+                "texto": "João Affonso Botelho foi nomeado capitão da guarda.",
+                "metadata": {"bib": "029033_02", "pagina": "1"},
+            },
+            {
+                "id": "x2",
+                "texto": "Botelho aparece em nota comercial sem prenome.",
+                "metadata": {"bib": "029033_02", "pagina": "2"},
+            },
+        ]
+
+        with patch("src.search._load_search_docs", return_value=docs):
+            results = search.buscar_textual_historica("Joao Afonso Botelho", n_results=5)
+
+        self.assertEqual(results[0]["id"], "x1")
+        self.assertEqual(len(results), 1)
+        self.assertGreaterEqual(results[0]["score"], 0.7)
+
+    def test_busca_textual_historica_recupera_benedicto_historico(self):
+        docs = [
+            {
+                "id": "x1",
+                "texto": "Capitão Antonio Benedicto d'Araujo Pernambuco foi citado em edital.",
+                "metadata": {"bib": "029033_02", "pagina": "1"},
+            }
+        ]
+
+        with patch("src.search._load_search_docs", return_value=docs):
+            results = search.buscar_textual_historica("Antonio Benedicto d'Araujo Pernambuco", n_results=5)
+
+        self.assertEqual(results[0]["id"], "x1")
+        self.assertGreaterEqual(results[0]["score"], 0.8)
+
     def test_busca_hibrida_faz_merge_de_textual_e_semantica(self):
         textual = [
             {

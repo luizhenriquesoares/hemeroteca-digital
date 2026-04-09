@@ -1,4 +1,5 @@
 import importlib
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,6 +7,7 @@ from unittest.mock import patch
 
 provider = importlib.import_module("src.correcao_provider")
 llm_openai = importlib.import_module("src.llm_correcao")
+llm_claude_cli = importlib.import_module("src.processing.llm_correcao_claude_cli")
 
 
 class CorrecaoProviderTests(unittest.TestCase):
@@ -35,8 +37,17 @@ class CorrecaoProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "x.txt"
             p.write_text("abc", encoding="utf-8")
-            with patch("src.llm_correcao_claude.corrigir_arquivo", return_value=True) as mocked:
+            with patch("src.processing.llm_correcao_claude_cli.corrigir_arquivo", return_value=True) as mocked:
                 ok = provider.corrigir_arquivo(p, provider="claude", model="opus", force=True)
+            self.assertTrue(ok)
+            mocked.assert_called_once()
+
+    def test_corrigir_arquivo_dispatch_claude_api(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "x.txt"
+            p.write_text("abc", encoding="utf-8")
+            with patch("src.processing.llm_correcao_claude.corrigir_arquivo", return_value=True) as mocked:
+                ok = provider.corrigir_arquivo(p, provider="claude-api", model="opus", force=True)
             self.assertTrue(ok)
             mocked.assert_called_once()
 
@@ -95,6 +106,35 @@ class CorrecaoProviderTests(unittest.TestCase):
         self.assertEqual(out, "corrigido")
         self.assertEqual(captured["max_tokens"], 4321)
         self.assertNotIn("max_completion_tokens", captured)
+
+    def test_claude_cli_retry_after_timeout(self):
+        class Result:
+            returncode = 0
+            stdout = "corrigido"
+            stderr = ""
+
+        with patch(
+            "src.processing.llm_correcao_claude_cli.subprocess.run",
+            side_effect=[
+                subprocess.TimeoutExpired(cmd="claude", timeout=60),
+                Result(),
+            ],
+        ) as mocked:
+            out = llm_claude_cli._corrigir_parte("texto suficientemente longo", "opus", 60)
+
+        self.assertEqual(out, "corrigido")
+        self.assertEqual(mocked.call_count, 2)
+
+    def test_claude_cli_texto_grande_eh_dividido(self):
+        texto = ("paragrafo muito longo com conteudo historico\n\n" * 80).strip()
+        with patch(
+            "src.processing.llm_correcao_claude_cli._corrigir_parte",
+            side_effect=lambda parte, model, timeout: f"[{len(parte)}]",
+        ) as mocked:
+            out = llm_claude_cli.corrigir_texto(texto, model="opus", timeout=60)
+
+        self.assertGreater(mocked.call_count, 1)
+        self.assertIn("[", out)
 
 
 if __name__ == "__main__":

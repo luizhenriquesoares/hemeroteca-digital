@@ -60,6 +60,7 @@ TESSERACT_PSM = 3  # automatic page segmentation
 # RAG
 CHUNK_SIZE = 1000  # caracteres por chunk
 CHUNK_OVERLAP = 200  # sobreposição entre chunks
-EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-CHROMA_COLLECTION = "hemeroteca_pe"
+EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_PROVIDER = "openai"
+CHROMA_COLLECTION = "hemeroteca_pe_v2"
 STRUCTURED_DB = STRUCTURED_DIR / "hemeroteca.db"

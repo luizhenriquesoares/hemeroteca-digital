@@ -12,6 +12,20 @@ from src.config import TEXT_DIR
 logger = logging.getLogger(__name__)
 
 
+def _load_acervo_name_from_cache(bib: str) -> str | None:
+    cache_file = Path("data/cache/acervos_pe.json")
+    if not cache_file.exists():
+        return None
+    try:
+        acervos = json.loads(cache_file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    for acervo in acervos:
+        if isinstance(acervo, dict) and acervo.get("bib") == bib and acervo.get("nome"):
+            return acervo["nome"]
+    return None
+
+
 def _merge_metadata(existing: dict, fresh: dict) -> dict:
     merged = dict(existing or {})
     merged.update({k: v for k, v in fresh.items() if v not in (None, "")})
@@ -77,7 +91,7 @@ def enrich_metadata(headless: bool = True, bib: str | None = None) -> dict[str, 
     from src.scraping.driver import create_driver
 
     if bib:
-        acervos = [{"bib": bib, "nome": f"Acervo {bib}"}]
+        acervos = [{"bib": bib, "nome": _load_acervo_name_from_cache(bib) or f"Acervo {bib}"}]
     else:
         cache_file = Path("data/cache/acervos_pe.json")
         if not cache_file.exists():
