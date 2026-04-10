@@ -38,11 +38,11 @@ Transformar a base atual em uma plataforma historiográfica confiável, com:
 
 ## Fase 3: Extração Estruturada
 
-- [ ] Melhorar extração de pessoas com menos falso positivo institucional.
-- [ ] Adicionar extração de lugares.
-- [ ] Adicionar extração de instituições.
-- [ ] Adicionar extração de cargos e funções com mais precisão.
-- [ ] Expandir relações:
+- [x] Melhorar extração de pessoas com menos falso positivo institucional.
+- [x] Adicionar extração de lugares.
+- [x] Adicionar extração de instituições.
+- [x] Adicionar extração de cargos e funções com mais precisão.
+- [x] Expandir relações:
   - `spouse_of`
   - `child_of`
   - `parent_of`
@@ -51,29 +51,29 @@ Transformar a base atual em uma plataforma historiográfica confiável, com:
   - `resident_of`
   - `mentioned_with`
 - [ ] Guardar mais de uma evidência por relação.
-- [ ] Melhorar normalização histórica de nomes e aliases.
+- [x] Melhorar normalização histórica de nomes e aliases.
 
 ## Fase 4: Resolução de Identidade
 
-- [ ] Separar claramente `menção` de `entidade consolidada`.
-- [ ] Criar heurística de fusão por:
+- [x] Separar claramente `menção` de `entidade consolidada`.
+- [x] Criar heurística de fusão por:
   - nome normalizado
   - cargo
   - período
   - local
   - coocorrência com parentes e instituições
-- [ ] Evitar fusão agressiva de homônimos.
-- [ ] Marcar entidades ambíguas para revisão futura.
+- [x] Evitar fusão agressiva de homônimos.
+- [x] Marcar entidades ambíguas para revisão futura.
 
 ## Fase 5: Qualidade e Confiabilidade
 
-- [ ] Melhorar benchmark de OCR com métricas historiográficas mais úteis.
-- [ ] Melhorar benchmark comparando:
+- [x] Melhorar benchmark de OCR com métricas historiográficas mais úteis.
+- [x] Melhorar benchmark comparando:
   - OCR salvo
   - OCR adaptativo
   - texto corrigido
-- [ ] Criar score operacional para detectar páginas ruins candidatas a reprocessamento.
-- [ ] Ampliar testes de regressão para busca de pessoas e famílias.
+- [x] Criar score operacional para detectar páginas ruins candidatas a reprocessamento.
+- [x] Ampliar testes de regressão para busca de pessoas e famílias.
 - [ ] Validar consultas reais com casos como:
   - João Affonso Botelho
   - Antonio Benedicto d'Araujo Pernambuco

@@ -870,3 +870,376 @@ def get_featured_graph(
             nodes[max(ec, key=ec.get)]["central"] = True
 
     return {"nodes": list(nodes.values()), "edges": edges}
+
+
+# === Camadas semânticas para o grafo interativo ===
+
+LAYER_PREDICATES = {
+    "family": {"child_of", "parent_of", "widow_of", "spouse_of"},
+    "roles": {"holds_role", "appointed_to", "captain_of", "indicated_for", "proposed", "admitted_to"},
+    "justice": {"accused_of", "accused", "absolved", "victim_of", "witness_of", "defended", "opposed"},
+    "slavery": {"slave_of", "fugitive", "owner_of", "freed_by"},
+    "residence": {"resident_of", "location_of"},
+    "events": {"deceased", "signed_by", "authored", "beneficiary_of", "observed"},
+}
+
+LAYER_LABELS = {
+    "family": "Família",
+    "roles": "Cargos",
+    "justice": "Justiça",
+    "slavery": "Escravidão",
+    "residence": "Residência",
+    "events": "Eventos",
+    "co_mention": "Co-menção",
+}
+
+LAYER_COLORS = {
+    "family": "#dc2626",
+    "roles": "#2563eb",
+    "justice": "#7c3aed",
+    "slavery": "#b45309",
+    "residence": "#0891b2",
+    "events": "#059669",
+    "co_mention": "#a8a29e",
+}
+
+PREDICATE_LABELS = {
+    "child_of": "filho(a) de",
+    "parent_of": "pai/mãe de",
+    "widow_of": "viúva de",
+    "spouse_of": "cônjuge de",
+    "holds_role": "tem o cargo",
+    "appointed_to": "nomeado para",
+    "captain_of": "capitão de",
+    "indicated_for": "indicado para",
+    "proposed": "proposto",
+    "admitted_to": "admitido em",
+    "accused_of": "acusado de",
+    "accused": "acusado",
+    "absolved": "absolvido",
+    "victim_of": "vítima de",
+    "witness_of": "testemunha de",
+    "defended": "defendeu",
+    "opposed": "opôs-se a",
+    "slave_of": "escravo(a) de",
+    "fugitive": "fugitivo",
+    "owner_of": "proprietário de",
+    "freed_by": "libertado por",
+    "resident_of": "morador em",
+    "location_of": "localizado em",
+    "deceased": "faleceu",
+    "signed_by": "assinado por",
+    "authored": "autor de",
+    "beneficiary_of": "beneficiário de",
+    "observed": "observado",
+    "co_mention": "citados juntos",
+}
+
+
+def _predicate_to_layer(predicate: str) -> str | None:
+    for layer, predicates in LAYER_PREDICATES.items():
+        if predicate in predicates:
+            return layer
+    return None
+
+
+def get_layered_graph(
+    db_path: Path = STRUCTURED_DB,
+    layers: list[str] | None = None,
+    limit: int = 30,
+    min_shared_pages: int = 4,
+    min_confidence: float = 0.4,
+) -> dict:
+    """Grafo com filtro por camadas semânticas (família, cargos, justiça, etc).
+
+    Cada aresta vem etiquetada com a camada e o predicado original. Co-menção
+    só entra se a camada estiver explicitamente solicitada (é cara e ruidosa).
+    """
+    layers = layers or ["family", "roles", "co_mention"]
+    layer_set = {l.strip() for l in layers if l.strip()}
+
+    selected_predicates: set[str] = set()
+    for layer in layer_set:
+        selected_predicates |= LAYER_PREDICATES.get(layer, set())
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    nodes: dict[str, dict] = {}
+    edges: list[dict] = []
+
+    def _ensure_node(entity_id: int, name: str, etype: str = "person") -> str | None:
+        if not _is_graph_legible(name) and etype == "person":
+            return None
+        nid = f"entity_{entity_id}"
+        if nid not in nodes:
+            nodes[nid] = {
+                "id": nid,
+                "entity_id": int(entity_id),
+                "label": name,
+                "type": etype,
+                "mentions": 0,
+                "role": "",
+                "central": False,
+                "layers": [],
+            }
+        return nid
+
+    # 1. Carrega relações biográficas das camadas selecionadas
+    if selected_predicates:
+        placeholders = ",".join("?" * len(selected_predicates))
+        rows = conn.execute(
+            f"""
+            SELECT r.id, r.subject_entity_id, r.object_entity_id, r.predicate,
+                   r.object_literal, r.confidence,
+                   se.canonical_name AS subject_name, se.type AS subject_type,
+                   oe.canonical_name AS object_name, oe.type AS object_type
+            FROM relations r
+            JOIN entities se ON se.id = r.subject_entity_id
+            LEFT JOIN entities oe ON oe.id = r.object_entity_id
+            WHERE r.predicate IN ({placeholders})
+              AND r.confidence >= ?
+              AND LENGTH(se.canonical_name) >= 6
+              AND r.object_entity_id IS NOT NULL
+              AND LENGTH(oe.canonical_name) >= 6
+            ORDER BY r.confidence DESC
+            LIMIT ?
+            """,
+            (*selected_predicates, min_confidence, limit * 8),
+        ).fetchall()
+
+        for row in rows:
+            layer = _predicate_to_layer(row["predicate"])
+            if not layer:
+                continue
+            sid = _ensure_node(row["subject_entity_id"], row["subject_name"], row["subject_type"] or "person")
+            oid = _ensure_node(row["object_entity_id"], row["object_name"], row["object_type"] or "person")
+            if not sid or not oid:
+                continue
+            if layer not in nodes[sid]["layers"]:
+                nodes[sid]["layers"].append(layer)
+            if layer not in nodes[oid]["layers"]:
+                nodes[oid]["layers"].append(layer)
+            edges.append({
+                "source": sid,
+                "target": oid,
+                "predicate": row["predicate"],
+                "layer": layer,
+                "label": PREDICATE_LABELS.get(row["predicate"], row["predicate"]),
+                "weight": 3,
+                "relation_id": int(row["id"]),
+                "confidence": float(row["confidence"]),
+            })
+
+    # 2. Adiciona co-menção (se solicitado)
+    if "co_mention" in layer_set:
+        pairs = conn.execute(
+            """
+            SELECT
+                e1.id AS id_a, e1.canonical_name AS name_a,
+                e2.id AS id_b, e2.canonical_name AS name_b,
+                COUNT(DISTINCT m1.page_id) AS shared_pages
+            FROM entity_mentions m1
+            JOIN entity_mentions m2 ON m2.page_id = m1.page_id AND m2.entity_id > m1.entity_id
+            JOIN entities e1 ON e1.id = m1.entity_id
+            JOIN entities e2 ON e2.id = m2.entity_id
+            WHERE e1.type = 'person' AND e2.type = 'person'
+              AND LENGTH(e1.canonical_name) >= 8
+              AND LENGTH(e2.canonical_name) >= 8
+            GROUP BY m1.entity_id, m2.entity_id
+            HAVING shared_pages >= ?
+            ORDER BY shared_pages DESC
+            LIMIT ?
+            """,
+            (min_shared_pages, limit * 4),
+        ).fetchall()
+
+        for pair in pairs:
+            if len(nodes) >= limit * 2:
+                break
+            sid = _ensure_node(pair["id_a"], pair["name_a"])
+            oid = _ensure_node(pair["id_b"], pair["name_b"])
+            if not sid or not oid:
+                continue
+            if "co_mention" not in nodes[sid]["layers"]:
+                nodes[sid]["layers"].append("co_mention")
+            if "co_mention" not in nodes[oid]["layers"]:
+                nodes[oid]["layers"].append("co_mention")
+            edges.append({
+                "source": sid,
+                "target": oid,
+                "predicate": "co_mention",
+                "layer": "co_mention",
+                "label": f"{pair['shared_pages']} págs.",
+                "weight": int(pair["shared_pages"]),
+            })
+
+    # 3. Enriquece nós com cargo e contagem de menções
+    if nodes:
+        entity_ids = [n["entity_id"] for n in nodes.values()]
+        id_list = ",".join(str(i) for i in entity_ids)
+        for row in conn.execute(f"""
+            SELECT entity_id, COUNT(*) AS c FROM entity_mentions
+            WHERE entity_id IN ({id_list}) GROUP BY entity_id
+        """).fetchall():
+            nid = f"entity_{row['entity_id']}"
+            if nid in nodes:
+                nodes[nid]["mentions"] = int(row["c"])
+
+        for row in conn.execute(f"""
+            SELECT r.subject_entity_id, COALESCE(o.canonical_name, r.object_literal) AS role
+            FROM relations r LEFT JOIN entities o ON o.id = r.object_entity_id
+            WHERE r.predicate = 'holds_role' AND r.subject_entity_id IN ({id_list})
+            ORDER BY r.confidence DESC
+        """).fetchall():
+            nid = f"entity_{row['subject_entity_id']}"
+            if nid in nodes and not nodes[nid]["role"]:
+                nodes[nid]["role"] = row["role"] or ""
+
+    conn.close()
+
+    # 4. Limita ao top N por grau (mais conexões)
+    if len(nodes) > limit:
+        degree: dict[str, int] = {}
+        for e in edges:
+            degree[e["source"]] = degree.get(e["source"], 0) + 1
+            degree[e["target"]] = degree.get(e["target"], 0) + 1
+        keep = set(sorted(degree, key=lambda nid: degree.get(nid, 0), reverse=True)[:limit])
+        nodes = {k: v for k, v in nodes.items() if k in keep}
+        edges = [e for e in edges if e["source"] in keep and e["target"] in keep]
+
+    # 5. Marca o nó central (maior grau)
+    if nodes:
+        degree = {}
+        for e in edges:
+            degree[e["source"]] = degree.get(e["source"], 0) + 1
+            degree[e["target"]] = degree.get(e["target"], 0) + 1
+        if degree:
+            nodes[max(degree, key=lambda nid: degree.get(nid, 0))]["central"] = True
+
+    return {
+        "nodes": list(nodes.values()),
+        "edges": edges,
+        "layers_active": sorted(layer_set),
+        "layer_meta": {
+            layer: {
+                "label": LAYER_LABELS.get(layer, layer),
+                "color": LAYER_COLORS.get(layer, "#78716c"),
+            }
+            for layer in LAYER_LABELS
+        },
+    }
+
+
+def get_edge_evidence(
+    source_entity_id: int,
+    target_entity_id: int,
+    db_path: Path = STRUCTURED_DB,
+) -> dict:
+    """Encontra a página onde duas entidades aparecem juntas, com snippet, imagem
+    e qualquer relação direta entre elas.
+
+    Retorna:
+        {
+            "source": {id, name, type},
+            "target": {id, name, type},
+            "shared_pages": [
+                {bib, pagina, jornal, ano, image_url, page_view_url, source_snippet, target_snippet}
+            ],
+            "direct_relations": [
+                {predicate, label, confidence, evidence: {quote, page_view_url, ...}}
+            ]
+        }
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    # 1. Metadados das entidades
+    source = conn.execute(
+        "SELECT id, canonical_name, type FROM entities WHERE id = ?", (source_entity_id,)
+    ).fetchone()
+    target = conn.execute(
+        "SELECT id, canonical_name, type FROM entities WHERE id = ?", (target_entity_id,)
+    ).fetchone()
+    if not source or not target:
+        conn.close()
+        return {"error": "Entidade não encontrada"}
+
+    # 2. Páginas compartilhadas (top 5 por densidade de menções)
+    shared_pages_rows = conn.execute(
+        """
+        SELECT p.id AS page_id, p.bib, p.pagina, p.jornal, p.ano, p.edicao, p.image_path,
+               m1.snippet AS source_snippet, m2.snippet AS target_snippet,
+               COUNT(*) OVER (PARTITION BY p.id) AS row_count
+        FROM entity_mentions m1
+        JOIN entity_mentions m2 ON m2.page_id = m1.page_id
+        JOIN pages p ON p.id = m1.page_id
+        WHERE m1.entity_id = ? AND m2.entity_id = ?
+        GROUP BY p.id
+        ORDER BY p.id DESC
+        LIMIT 5
+        """,
+        (source_entity_id, target_entity_id),
+    ).fetchall()
+
+    shared_pages = []
+    for row in shared_pages_rows:
+        shared_pages.append({
+            "page_id": int(row["page_id"]),
+            "bib": row["bib"],
+            "pagina": str(row["pagina"]),
+            "jornal": row["jornal"] or row["bib"],
+            "ano": row["ano"] or "?",
+            "edicao": row["edicao"] or "?",
+            "page_view_url": _page_view_url(row["bib"], str(row["pagina"]), source["canonical_name"]),
+            "image_api_url": f"/api/page/{row['bib']}/{row['pagina']}",
+            "source_snippet": (row["source_snippet"] or "")[:300],
+            "target_snippet": (row["target_snippet"] or "")[:300],
+        })
+
+    # 3. Relações diretas entre as duas entidades (qualquer direção)
+    relation_rows = conn.execute(
+        """
+        SELECT r.id, r.predicate, r.subject_entity_id, r.object_entity_id, r.confidence
+        FROM relations r
+        WHERE (r.subject_entity_id = ? AND r.object_entity_id = ?)
+           OR (r.subject_entity_id = ? AND r.object_entity_id = ?)
+        ORDER BY r.confidence DESC
+        LIMIT 6
+        """,
+        (source_entity_id, target_entity_id, target_entity_id, source_entity_id),
+    ).fetchall()
+
+    direct_relations = []
+    for row in relation_rows:
+        evidences = _load_relation_evidences(conn, int(row["id"]))
+        primary = evidences[0] if evidences else None
+        direct_relations.append({
+            "relation_id": int(row["id"]),
+            "predicate": row["predicate"],
+            "label": PREDICATE_LABELS.get(row["predicate"], row["predicate"]),
+            "direction": "source_to_target" if row["subject_entity_id"] == source_entity_id else "target_to_source",
+            "confidence": float(row["confidence"]),
+            "evidence": (
+                {
+                    "quote": (primary["quote"] or "")[:300],
+                    "bib": primary["bib"],
+                    "pagina": str(primary["pagina"]),
+                    "jornal": primary["jornal"] or primary["bib"],
+                    "ano": primary["ano"] or "?",
+                    "page_view_url": _page_view_url(primary["bib"], str(primary["pagina"]), source["canonical_name"]),
+                    "image_api_url": f"/api/page/{primary['bib']}/{primary['pagina']}",
+                }
+                if primary
+                else None
+            ),
+        })
+
+    conn.close()
+
+    return {
+        "source": {"id": int(source["id"]), "name": source["canonical_name"], "type": source["type"]},
+        "target": {"id": int(target["id"]), "name": target["canonical_name"], "type": target["type"]},
+        "shared_pages": shared_pages,
+        "direct_relations": direct_relations,
+    }

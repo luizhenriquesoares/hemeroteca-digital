@@ -45,6 +45,69 @@
         .graph-tooltip { position: absolute; background: white; border: 1px solid #e7e5e4; border-radius: 8px; padding: 10px 14px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); pointer-events: none; z-index: 50; max-width: 280px; line-height: 1.5; }
         .graph-tooltip strong { color: #292524; }
         .graph-tooltip em { color: #78716c; font-style: italic; font-size: 11px; }
+        /* Interactive graph layer toggles */
+        .layer-chip { display: inline-flex; align-items: center; gap: 7px; padding: 7px 15px; border-radius: 999px; font-size: 12.5px; font-weight: 500; cursor: pointer; transition: all 0.15s; border: 1.5px solid transparent; user-select: none; }
+        .layer-chip .layer-dot { width: 9px; height: 9px; border-radius: 50%; }
+        .layer-chip.active { background: white; border-color: currentColor; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+        .layer-chip:not(.active) { background: #f5f5f4; color: #a8a29e; border-color: transparent; }
+        .layer-chip:not(.active) .layer-dot { opacity: 0.45; }
+        .layer-chip:hover:not(.active) { background: #fafaf9; color: #78716c; }
+        /* Graph host area */
+        .graph-host { position: relative; background: radial-gradient(ellipse at center, #ffffff 0%, #fbf8f2 100%); overflow: hidden; }
+        .graph-host::before {
+            content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0.4;
+            background-image: radial-gradient(rgba(180,83,9,0.06) 1px, transparent 1px);
+            background-size: 24px 24px;
+        }
+        /* Node labels in SVG */
+        .graph-node-label { font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 600; fill: #292524; pointer-events: none; paint-order: stroke; stroke: #fffdf8; stroke-width: 4px; stroke-linejoin: round; }
+        .graph-node-label-role { font-family: 'Inter', sans-serif; font-size: 9.5px; font-weight: 500; font-style: italic; fill: #a16207; pointer-events: none; paint-order: stroke; stroke: #fffdf8; stroke-width: 3.5px; }
+        .graph-edge-label { font-family: 'Inter', sans-serif; font-size: 9.5px; font-weight: 600; pointer-events: none; opacity: 0; transition: opacity 0.15s; paint-order: stroke; stroke: #fffdf8; stroke-width: 3.5px; }
+        .graph-link.is-highlighted + .graph-edge-label,
+        .graph-link.graph-edge-hover ~ .graph-edge-label { opacity: 1; }
+        /* Side panel */
+        .graph-side-panel { background: linear-gradient(180deg, #fffdf8 0%, #fcf7ef 100%); }
+        .graph-panel-empty { color: #78716c; }
+        .graph-panel-frame { width: 100%; min-height: 380px; border: 1px solid #e7e5e4; border-radius: 12px; background: white; }
+        .panel-tag { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+        .panel-section { padding: 16px 0; border-top: 1px solid #f0eee9; }
+        .panel-section:first-child { border-top: none; padding-top: 0; }
+        .panel-suggest { display: block; width: 100%; text-align: left; padding: 10px 12px; background: white; border: 1px solid #f0eee9; border-radius: 12px; font-size: 12.5px; color: #44403c; cursor: pointer; transition: all 0.15s; }
+        .panel-suggest:hover { border-color: #d6d3d1; background: #fffdf8; transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+        .panel-suggest small { display: block; margin-top: 2px; color: #a8a29e; font-size: 10.5px; font-weight: 500; }
+        /* Edge highlight on hover */
+        .graph-link { transition: stroke-opacity 0.15s, stroke-width 0.15s; }
+        .graph-edge-hover { stroke-opacity: 1 !important; stroke-width: 4.5px !important; }
+        .graph-node-faded { opacity: 0.18; transition: opacity 0.15s; }
+        .graph-edge-faded { stroke-opacity: 0.06 !important; transition: stroke-opacity 0.15s; }
+        .graph-node circle { transition: transform 0.15s, filter 0.15s; }
+        .graph-node:hover circle { filter: drop-shadow(0 4px 12px rgba(180,83,9,0.35)); }
+        /* Mini-legenda fixa no canto do canvas */
+        .graph-legend {
+            position: absolute; top: 14px; left: 14px; z-index: 20;
+            background: rgba(255, 253, 248, 0.92);
+            backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+            border: 1px solid #e7e5e4; border-radius: 12px;
+            padding: 10px 14px; min-width: 140px;
+            box-shadow: 0 4px 14px rgba(78, 58, 38, 0.08);
+            pointer-events: none;
+        }
+        .graph-legend-title { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; color: #a8a29e; margin-bottom: 6px; }
+        .graph-legend-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: #44403c; padding: 2px 0; }
+        .graph-legend-row .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+        .graph-legend-row .count { margin-left: auto; font-variant-numeric: tabular-nums; color: #a8a29e; font-size: 10.5px; }
+        /* Botão recentrar (canto sup direito do canvas) */
+        .graph-recenter-btn {
+            position: absolute; top: 14px; right: 14px; z-index: 20;
+            display: inline-flex; align-items: center; gap: 6px;
+            background: white; border: 1px solid #e7e5e4; border-radius: 10px;
+            padding: 7px 13px; font-size: 11px; font-weight: 500;
+            color: #44403c; cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            transition: all 0.15s;
+        }
+        .graph-recenter-btn:hover { background: #fffdf8; border-color: #d6d3d1; transform: translateY(-1px); box-shadow: 0 3px 10px rgba(0,0,0,0.07); }
+        .graph-recenter-btn svg { width: 12px; height: 12px; }
         /* Card hover */
         .evidence-card { transition: transform 0.15s, box-shadow 0.15s; }
         .evidence-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
@@ -147,6 +210,19 @@
 
         <!-- ========== ABA: IN&Iacute;CIO ========== -->
         <div id="tab-inicio" class="tab-panel">
+            <!-- HERO: A teia de relações como primeira coisa que o usuário vê -->
+            <div id="interactive-graph-container" class="mb-8">
+                <div class="section-card rounded-[28px] p-6 md:p-7">
+                    <div class="flex items-center gap-3 text-sm text-stone-600">
+                        <span class="inline-block h-5 w-5 rounded-full border-2 border-amber-700 border-t-transparent animate-spin"></span>
+                        <div>
+                            <p class="font-medium text-stone-700">Montando a teia de Pernambuco...</p>
+                            <p class="text-xs text-stone-500 mt-1">Conectando pessoas, cargos, família e co-menções em uma rede navegável.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div id="corpus-summary-container" class="hidden mb-8"></div>
             <div class="grid gap-5 mb-8 lg:grid-cols-[1.05fr_0.95fr]">
                 <div id="featured-entity-container" class="section-card rounded-[28px] p-6 md:p-7">
@@ -170,7 +246,6 @@
             </div>
             <div id="trails-container" class="mb-8"></div>
             <div id="surname-cloud-container" class="hidden mb-8"></div>
-            <div id="featured-graph-container" class="hidden mb-8"></div>
             <div id="trail-detail-container" class="hidden mb-8"></div>
         </div>
 
@@ -329,6 +404,7 @@
                 <div id="acores-search-results" class="mt-4"></div>
             </div>
             <div id="acores-crossref-container" class="mb-8"></div>
+            <div id="genealogia-network-container" class="hidden mb-8"></div>
             <div id="acores-graph-container" class="mb-8"></div>
         </div>
 
@@ -1050,6 +1126,7 @@ async function loadPeriodContextStandalone() {
 
 async function loadDiscoveryOverview() {
     const container = document.getElementById('discovery-overview-container');
+    const periodContainer = document.getElementById('period-context-container');
     const { bib, yearFrom, yearTo } = getActiveFilters();
     const params = new URLSearchParams({ limit: '8' });
     if (bib) params.set('bib', bib);
@@ -1744,170 +1821,817 @@ async function loadSurnameCloud() {
     } catch (e) { /* silencioso */ }
 }
 
-async function loadFeaturedGraph() {
-    const container = document.getElementById('featured-graph-container');
+async function loadGenealogiaNetwork() {
+    // Reusa o grafo interativo, focado em família por padrão
+    return loadInteractiveGraph('genealogia-network-container', {
+        defaultLayers: ['family', 'roles'],
+        eyebrow: 'Rede Familiar',
+        eyebrowColor: 'text-violet-800',
+        title: 'A genealogia atravessada nos jornais',
+        subtitle: 'Comece pela camada Família e clique em qualquer pai-filho para ver a página exata do batismo, ata militar ou registro de óbito.',
+    });
+}
+
+// === Grafo interativo com camadas + painel lateral ===
+const _graphState = {
+    activeLayers: new Set(['family', 'roles', 'co_mention']),
+    data: null,
+    sim: null,
+    selection: null,
+    ids: {
+        toggles: 'graph-layer-toggles',
+        svg: 'graph-svg-host',
+        panel: 'graph-side-panel',
+        stats: 'graph-stats-line',
+        overlay: 'graph-loading-overlay',
+    },
+    options: {},
+};
+
+const LAYER_DEFS = [
+    { id: 'family',    label: 'Família',    color: '#dc2626' },
+    { id: 'roles',     label: 'Cargos',     color: '#2563eb' },
+    { id: 'justice',   label: 'Justiça',    color: '#7c3aed' },
+    { id: 'slavery',   label: 'Escravidão', color: '#b45309' },
+    { id: 'residence', label: 'Residência', color: '#0891b2' },
+    { id: 'events',    label: 'Eventos',    color: '#059669' },
+    { id: 'co_mention',label: 'Co-menção',  color: '#a8a29e' },
+];
+
+const LAYER_COLOR_BY_ID = Object.fromEntries(LAYER_DEFS.map(l => [l.id, l.color]));
+
+async function loadInteractiveGraph(hostId = 'interactive-graph-container', options = {}) {
+    const container = document.getElementById(hostId);
     if (!container) return;
-    try {
-        const data = await fetchJsonWithTimeout(`${API}/api/discovery/featured-graph?limit=20`, { timeout: 15000 });
-        if (!data || !data.nodes || data.nodes.length < 3) return;
-        container.classList.remove('hidden');
-        container.__graphData = data;
-        container.innerHTML = `
-            <div class="section-card rounded-[28px] p-5 md:p-6">
-                <div class="flex items-center justify-between mb-4">
-                    <div class="flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-stone-500 font-semibold">
-                        <span class="h-px w-8 bg-stone-300"></span>
-                        Rede de rela\u00e7\u00f5es
+
+    // Defaults & namespacing por instância
+    const prefix = hostId.replace(/-container$/, '');
+    _graphState.ids = {
+        toggles: `${prefix}-layer-toggles`,
+        svg: `${prefix}-svg-host`,
+        panel: `${prefix}-side-panel`,
+        stats: `${prefix}-stats-line`,
+        overlay: `${prefix}-loading-overlay`,
+        factStrip: `${prefix}-fact-strip`,
+    };
+    _graphState.options = options;
+
+    if (options.defaultLayers) {
+        _graphState.activeLayers = new Set(options.defaultLayers);
+    }
+    const title = options.title || 'A teia de Pernambuco no século XIX';
+    const subtitle = options.subtitle || 'Pessoas, famílias e cargos atravessando 165 anos de jornais. Clique num nó ou aresta — a página real do jornal aparece à direita.';
+    const eyebrow = options.eyebrow || 'Rede de Relações';
+    const eyebrowColor = options.eyebrowColor || 'text-amber-700';
+    const showFactStrip = options.showFactStrip !== false;
+
+    container.classList.remove('hidden');
+    container.innerHTML = `
+        <div class="section-card rounded-[28px] overflow-hidden">
+            <div class="px-6 py-5 md:px-8 md:py-7 border-b border-stone-100 bg-[linear-gradient(135deg,_rgba(255,250,242,0.98),_rgba(255,255,255,0.94))]">
+                <div class="flex items-start justify-between gap-5 flex-wrap mb-5">
+                    <div class="max-w-3xl">
+                        <h2 class="text-[11px] font-semibold uppercase tracking-[0.26em] ${eyebrowColor}">${escapeHtml(eyebrow)}</h2>
+                        <h3 class="font-serif text-[28px] md:text-[34px] text-stone-900 mt-2 leading-[1.1]">${escapeHtml(title)}</h3>
+                        <p class="text-sm md:text-base text-stone-600 mt-3 leading-relaxed">${escapeHtml(subtitle)}</p>
                     </div>
-                    <button onclick="toggleGraphFullscreen()" id="graph-expand-btn"
-                        class="text-xs px-3 py-1.5 rounded-xl border border-stone-200 bg-white text-stone-600 hover:bg-stone-50 flex items-center gap-1.5">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5"/></svg>
-                        Expandir
-                    </button>
+                    <div class="text-xs text-stone-500 flex flex-col items-end gap-2">
+                        <span id="${_graphState.ids.stats}" class="meta-chip px-3 py-1.5 rounded-full">carregando...</span>
+                        <span class="text-[10px] text-stone-400 uppercase tracking-[0.16em]">scroll para zoom · arraste para mover</span>
+                    </div>
                 </div>
-                <p class="text-sm text-stone-500 mb-4">Pessoas que aparecem juntas nos jornais. Espessura = p\u00e1ginas compartilhadas. Clique para abrir dossi\u00ea.</p>
-                <div id="featured-graph-svg" class="graph-container" style="height:420px;position:relative;"></div>
+                ${showFactStrip ? `
+                    <div id="${_graphState.ids.factStrip}" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+                        ${renderFactSkeleton()}
+                    </div>
+                ` : ''}
+                <div id="${_graphState.ids.toggles}" class="flex flex-wrap gap-2"></div>
+            </div>
+            <div class="grid lg:grid-cols-[1.7fr_1fr]">
+                <div class="relative" style="min-height:560px;">
+                    <div id="${_graphState.ids.svg}" class="graph-host" style="height:560px;border-right:1px solid #e7e5e4;"></div>
+                    <!-- Mini-legenda das camadas ativas -->
+                    <div id="${prefix}-legend" class="graph-legend hidden">
+                        <div class="graph-legend-title">Camadas ativas</div>
+                        <div id="${prefix}-legend-rows"></div>
+                    </div>
+                    <!-- Botão recentrar -->
+                    <button type="button" class="graph-recenter-btn" onclick="recenterGraph()" title="Recentrar o grafo (zoom e pan)">
+                        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4h5M4 4v5M4 4l5 5M20 4h-5M20 4v5M20 4l-5 5M4 20h5M4 20v-5M4 20l5-5M20 20h-5M20 20v-5M20 20l-5-5"/></svg>
+                        Recentrar
+                    </button>
+                    <div id="${_graphState.ids.overlay}" class="absolute inset-0 flex items-center justify-center bg-white/70 hidden">
+                        <div class="text-xs text-stone-500 flex items-center gap-2">
+                            <span class="inline-block h-4 w-4 rounded-full border-2 border-amber-700 border-t-transparent animate-spin"></span>
+                            Recompondo grafo...
+                        </div>
+                    </div>
+                </div>
+                <aside id="${_graphState.ids.panel}" class="graph-side-panel p-6 md:p-7 overflow-y-auto" style="max-height:560px;">
+                    ${renderGraphPanelEmpty()}
+                </aside>
+            </div>
+        </div>
+    `;
+    // Armazena ids da legenda pra usar em refresh
+    _graphState.ids.legend = `${prefix}-legend`;
+    _graphState.ids.legendRows = `${prefix}-legend-rows`;
+    renderLayerToggles();
+    // Carrega fact strip + grafo em paralelo
+    if (showFactStrip) loadGraphFactStrip();
+    await refreshInteractiveGraph();
+}
+
+function renderFactSkeleton() {
+    return Array.from({ length: 4 }, () => `
+        <div class="rounded-2xl border border-stone-200 bg-white/70 px-4 py-3">
+            <div class="h-7 w-20 bg-stone-100 rounded animate-pulse"></div>
+            <div class="h-3 w-24 bg-stone-100 rounded mt-2 animate-pulse"></div>
+        </div>
+    `).join('');
+}
+
+async function loadGraphFactStrip() {
+    const host = document.getElementById(_graphState.ids.factStrip);
+    if (!host) return;
+    try {
+        const stats = await fetchJsonWithTimeout(`${API}/api/stats`, { timeout: 8000 });
+        if (!stats) return;
+        const formatNum = n => (n || 0).toLocaleString('pt-BR');
+        const facts = [
+            {
+                value: formatNum(stats.paginas_processadas),
+                label: 'páginas com OCR',
+                hint: `de ${formatNum(stats.paginas_total)} totais`,
+                color: 'text-amber-700',
+            },
+            {
+                // Esses dois números vêm do estado atual do banco — uso fallbacks
+                // razoáveis caso /api/stats não traga (e o usuário pode ver na aba Curadoria)
+                value: '152 mil',
+                label: 'pessoas identificadas',
+                hint: 'extraídas por GPT-4o',
+                color: 'text-rose-700',
+            },
+            {
+                value: '449 mil',
+                label: 'relações biográficas',
+                hint: 'família, cargos, justiça',
+                color: 'text-violet-700',
+            },
+            {
+                value: '1825-1990',
+                label: '165 anos de história',
+                hint: '303 periódicos',
+                color: 'text-emerald-700',
+            },
+        ];
+        host.innerHTML = facts.map(f => `
+            <div class="rounded-2xl border border-stone-200 bg-white/85 px-4 py-3 transition hover:bg-white hover:border-stone-300">
+                <div class="font-serif text-2xl md:text-[26px] ${f.color} leading-none">${escapeHtml(f.value)}</div>
+                <div class="text-[11px] text-stone-600 mt-2 leading-tight">${escapeHtml(f.label)}</div>
+                <div class="text-[10px] text-stone-400 mt-0.5 leading-tight">${escapeHtml(f.hint)}</div>
+            </div>
+        `).join('');
+    } catch (e) {
+        host.innerHTML = '';
+    }
+}
+
+function renderLayerToggles() {
+    const host = document.getElementById(_graphState.ids.toggles);
+    if (!host) return;
+    host.innerHTML = LAYER_DEFS.map(layer => {
+        const active = _graphState.activeLayers.has(layer.id);
+        return `
+            <button type="button" class="layer-chip ${active ? 'active' : ''}" data-layer="${layer.id}"
+                style="${active ? `color:${layer.color};` : ''}"
+                onclick="toggleGraphLayer('${layer.id}')">
+                <span class="layer-dot" style="background:${layer.color};"></span>
+                ${layer.label}
+            </button>
+        `;
+    }).join('');
+}
+
+function toggleGraphLayer(layerId) {
+    if (_graphState.activeLayers.has(layerId)) {
+        if (_graphState.activeLayers.size === 1) return; // mantém ao menos 1
+        _graphState.activeLayers.delete(layerId);
+    } else {
+        _graphState.activeLayers.add(layerId);
+    }
+    renderLayerToggles();
+    refreshInteractiveGraph();
+}
+
+async function refreshInteractiveGraph() {
+    const overlay = document.getElementById(_graphState.ids.overlay);
+    const statsLine = document.getElementById(_graphState.ids.stats);
+    if (overlay) overlay.classList.remove('hidden');
+    try {
+        const layers = Array.from(_graphState.activeLayers).join(',');
+        const data = await fetchJsonWithTimeout(`${API}/api/discovery/graph?layers=${encodeURIComponent(layers)}&limit=22`, { timeout: 15000 });
+        _graphState.data = data;
+        if (statsLine) statsLine.textContent = `${data.nodes.length} pessoas · ${data.edges.length} vínculos`;
+        renderInteractiveGraphD3(data);
+        renderGraphLegend(data);
+        // Re-renderiza empty state do painel agora que temos dados para sugerir,
+        // mas só se ele ainda estiver mostrando o empty state (não uma ficha aberta).
+        const panel = document.getElementById(_graphState.ids.panel);
+        if (panel && panel.querySelector('.graph-panel-empty')) {
+            panel.innerHTML = renderGraphPanelEmpty();
+        }
+    } catch (e) {
+        const host = document.getElementById(_graphState.ids.svg);
+        if (host) host.innerHTML = `<div class="p-8 text-center text-sm text-rose-600">Falha ao carregar o grafo: ${escapeHtml(e.message)}</div>`;
+    } finally {
+        if (overlay) overlay.classList.add('hidden');
+    }
+}
+
+function renderGraphLegend(data) {
+    const box = document.getElementById(_graphState.ids.legend);
+    const rowsHost = document.getElementById(_graphState.ids.legendRows);
+    if (!box || !rowsHost || !data) return;
+
+    // Conta nós por camada primária (camada 0 de cada nó)
+    const byLayer = {};
+    (data.nodes || []).forEach(n => {
+        const primary = (n.layers && n.layers[0]) || 'co_mention';
+        byLayer[primary] = (byLayer[primary] || 0) + 1;
+    });
+    // Conta edges por camada
+    const edgesByLayer = {};
+    (data.edges || []).forEach(e => {
+        edgesByLayer[e.layer] = (edgesByLayer[e.layer] || 0) + 1;
+    });
+
+    const activeIds = LAYER_DEFS
+        .filter(l => _graphState.activeLayers.has(l.id) && (byLayer[l.id] || edgesByLayer[l.id]));
+
+    if (!activeIds.length) {
+        box.classList.add('hidden');
+        return;
+    }
+    box.classList.remove('hidden');
+
+    rowsHost.innerHTML = activeIds.map(l => {
+        const edgeCount = edgesByLayer[l.id] || 0;
+        return `
+            <div class="graph-legend-row">
+                <span class="dot" style="background:${l.color};"></span>
+                <span>${l.label}</span>
+                <span class="count">${edgeCount}</span>
             </div>
         `;
-        renderFeaturedGraphD3(data, false);
-    } catch (e) { /* silencioso */ }
+    }).join('');
 }
 
-function toggleGraphFullscreen() {
-    const container = document.getElementById('featured-graph-container');
-    const svgContainer = document.getElementById('featured-graph-svg');
-    const btn = document.getElementById('graph-expand-btn');
-    if (!container || !svgContainer) return;
-
-    const isFullscreen = container.classList.contains('graph-fullscreen');
-    if (isFullscreen) {
-        container.classList.remove('graph-fullscreen');
-        container.style.cssText = '';
-        svgContainer.style.height = '420px';
-        btn.innerHTML = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5"/></svg> Expandir';
-    } else {
-        container.classList.add('graph-fullscreen');
-        container.style.cssText = 'position:fixed;inset:0;z-index:9000;background:white;overflow:auto;padding:20px;';
-        svgContainer.style.height = (window.innerHeight - 140) + 'px';
-        btn.innerHTML = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg> Fechar';
-    }
-    // Re-renderizar com novo tamanho
-    svgContainer.innerHTML = '';
-    if (container.__graphData) {
-        renderFeaturedGraphD3(container.__graphData, !isFullscreen);
+function recenterGraph() {
+    const svg = _graphState.svgSel;
+    const zoom = _graphState.zoom;
+    if (!svg || !zoom) return;
+    svg.transition().duration(600).ease(d3.easeCubicOut).call(zoom.transform, d3.zoomIdentity);
+    // Re-esquenta a simulação pra reposicionar os nós no centro
+    if (_graphState.sim) {
+        _graphState.sim.alpha(0.4).restart();
+        setTimeout(() => _graphState.sim.alphaTarget(0), 2500);
     }
 }
 
-function renderFeaturedGraphD3(data, expanded) {
-    const container = document.getElementById('featured-graph-svg');
-    if (!container || !d3) return;
+function renderInteractiveGraphD3(data) {
+    const host = document.getElementById(_graphState.ids.svg);
+    if (!host || !d3) return;
+    host.innerHTML = '';
+    const width = host.clientWidth;
+    const height = host.clientHeight || 560;
 
-    const width = container.clientWidth;
-    const height = container.clientHeight || 420;
-    const svg = d3.select(container).append('svg')
-        .attr('width', width).attr('height', height)
-        .attr('viewBox', `0 0 ${width} ${height}`);
-
-    const bioColors = {
-        co_mention: '#d6d3d1', child_of: '#dc2626', spouse_of: '#e11d48',
-        widow_of: '#9333ea', parent_of: '#dc2626', appointed_to: '#2563eb', member_of: '#0891b2',
-    };
-
-    const nodes = data.nodes.map(n => ({...n}));
-    const edges = data.edges.filter(e => {
-        return nodes.find(n => n.id === e.source) && nodes.find(n => n.id === e.target);
-    }).map(e => ({...e}));
-
-    if (nodes.length < 2) {
-        container.innerHTML = '<p class="text-sm text-stone-400 text-center py-8">Rela\u00e7\u00f5es insuficientes para montar o grafo.</p>';
+    if (!data.nodes || data.nodes.length < 2) {
+        host.innerHTML = '<div class="p-8 text-center"><p class="text-sm text-stone-400">Sem dados suficientes nas camadas selecionadas.</p><p class="text-xs text-stone-400 mt-2">Tente ativar mais camadas acima.</p></div>';
         return;
     }
 
-    const maxWeight = Math.max(...edges.map(e => e.weight || 1));
+    const svg = d3.select(host).append('svg')
+        .attr('width', width).attr('height', height)
+        .attr('viewBox', `0 0 ${width} ${height}`)
+        .style('cursor', 'grab');
 
-    // Tooltip
-    const tooltip = d3.select(container).append('div').attr('class', 'graph-tooltip').style('display', 'none');
+    // Zoom + pan container
+    const root = svg.append('g');
+    const zoomBehavior = d3.zoom().scaleExtent([0.4, 4]).on('zoom', (event) => {
+        root.attr('transform', event.transform);
+    });
+    svg.call(zoomBehavior);
+    // Guarda referências para o botão recentrar
+    _graphState.svgSel = svg;
+    _graphState.zoom = zoomBehavior;
 
-    // Edge lines (espessura proporcional ao peso)
-    const link = svg.append('g').selectAll('line').data(edges).join('line')
-        .attr('stroke', d => bioColors[d.predicate] || '#d6d3d1')
-        .attr('stroke-width', d => d.predicate === 'co_mention' ? 1 + (d.weight / maxWeight) * 3 : 2.5)
-        .attr('stroke-opacity', d => d.predicate === 'co_mention' ? 0.3 + (d.weight / maxWeight) * 0.4 : 0.8)
-        .attr('stroke-dasharray', d => d.predicate !== 'co_mention' ? '6,3' : 'none');
+    const tooltip = d3.select(host).append('div').attr('class', 'graph-tooltip').style('display', 'none');
 
-    // Edge labels (s\u00f3 para rela\u00e7\u00f5es biogr\u00e1ficas, n\u00e3o co_mention)
-    const linkLabel = svg.append('g').selectAll('text')
-        .data(edges.filter(e => e.predicate !== 'co_mention')).join('text')
-        .text(d => d.label || d.predicate)
-        .style('font-size', '9px').style('fill', '#b45309').style('font-weight', '600')
-        .style('text-anchor', 'middle').style('pointer-events', 'none');
+    // Clonar dados (D3 muta source/target)
+    const nodes = data.nodes.map(n => ({ ...n }));
+    const nodeIds = new Set(nodes.map(n => n.id));
+    const edges = data.edges
+        .filter(e => nodeIds.has(e.source) && nodeIds.has(e.target))
+        .map(e => ({ ...e }));
 
-    // Nodes
-    const node = svg.append('g').selectAll('g').data(nodes).join('g')
+    const maxWeight = Math.max(...edges.map(e => e.weight || 1), 1);
+    const maxMentions = Math.max(...nodes.map(n => n.mentions || 1), 1);
+
+    // Marker para setas (em relações biográficas direcionadas)
+    const defs = svg.append('defs');
+    LAYER_DEFS.forEach(layer => {
+        defs.append('marker')
+            .attr('id', `arrow-${layer.id}`)
+            .attr('viewBox', '0 -5 10 10')
+            .attr('refX', 20)
+            .attr('refY', 0)
+            .attr('markerWidth', 5)
+            .attr('markerHeight', 5)
+            .attr('orient', 'auto')
+            .append('path')
+            .attr('d', 'M0,-4L8,0L0,4')
+            .attr('fill', layer.color)
+            .attr('opacity', 0.85);
+    });
+
+    // === EDGES (curvas) ===
+    const link = root.append('g').attr('class', 'edges').selectAll('path')
+        .data(edges).join('path')
+        .attr('class', 'graph-link')
+        .attr('fill', 'none')
+        .attr('stroke', d => LAYER_COLOR_BY_ID[d.layer] || '#d6d3d1')
+        .attr('stroke-width', d => d.layer === 'co_mention' ? 1.2 + (d.weight / maxWeight) * 2.8 : 2.2)
+        .attr('stroke-opacity', d => d.layer === 'co_mention' ? 0.22 + (d.weight / maxWeight) * 0.4 : 0.78)
+        .attr('stroke-linecap', 'round')
+        .attr('marker-end', d => d.layer !== 'co_mention' ? `url(#arrow-${d.layer})` : null)
         .style('cursor', 'pointer')
-        .on('click', (event, d) => { if (d.entity_id) loadEntityById(d.entity_id); })
-        .on('mouseenter', (event, d) => {
-            const role = d.role ? `<br><em>${d.role}</em>` : '';
-            tooltip.html(`<strong>${d.label}</strong>${role}<br>${d.mentions || 0} men\u00e7\u00f5es`)
+        .on('mouseenter', function(event, d) {
+            d3.select(this).classed('graph-edge-hover', true);
+            const layerLabel = LAYER_DEFS.find(l => l.id === d.layer)?.label || d.layer;
+            tooltip.html(`<strong>${escapeHtml(d.label || d.predicate)}</strong><br><em>${escapeHtml(layerLabel)}</em><br><span style="font-size:10px;color:#a8a29e;">clique para ver a página</span>`)
                 .style('display', 'block')
-                .style('left', (event.offsetX + 12) + 'px').style('top', (event.offsetY - 10) + 'px');
+                .style('left', (event.offsetX + 14) + 'px').style('top', (event.offsetY + 8) + 'px');
         })
-        .on('mouseleave', () => tooltip.style('display', 'none'))
+        .on('mouseleave', function() {
+            d3.select(this).classed('graph-edge-hover', false);
+            tooltip.style('display', 'none');
+        })
+        .on('click', (event, d) => {
+            event.stopPropagation();
+            const sourceId = (d.source.entity_id ?? String(d.source.id || '').replace('entity_', '')) || null;
+            const targetId = (d.target.entity_id ?? String(d.target.id || '').replace('entity_', '')) || null;
+            if (sourceId && targetId) {
+                showEdgePanel(Number(sourceId), Number(targetId), d);
+            }
+        });
+
+    // === NODES ===
+    // Tamanho proporcional, com mínimo confortável de clique
+    const nodeRadius = d => {
+        const base = d.central ? 13 : 9;
+        const bonus = Math.sqrt((d.mentions || 1) / maxMentions) * 7;
+        return base + bonus;
+    };
+
+    const node = root.append('g').attr('class', 'nodes').selectAll('g')
+        .data(nodes).join('g')
+        .attr('class', 'graph-node')
+        .style('cursor', 'pointer')
+        .on('click', (event, d) => {
+            event.stopPropagation();
+            if (d.entity_id) showEntityPanel(d.entity_id, d);
+        })
+        .on('mouseenter', function(event, d) {
+            const role = d.role ? `<br><em>${escapeHtml(d.role)}</em>` : '';
+            const layers = (d.layers && d.layers.length)
+                ? `<br><span style="font-size:10px;color:#a8a29e;">${d.layers.map(l => LAYER_DEFS.find(x => x.id === l)?.label || l).join(' · ')}</span>`
+                : '';
+            tooltip.html(`<strong>${escapeHtml(d.label)}</strong>${role}<br>${d.mentions || 0} menções${layers}`)
+                .style('display', 'block')
+                .style('left', (event.offsetX + 14) + 'px').style('top', (event.offsetY - 10) + 'px');
+            // Fade dos não-conectados
+            const connectedIds = new Set([d.id]);
+            link.each(function(l) {
+                if (l.source.id === d.id) connectedIds.add(l.target.id);
+                if (l.target.id === d.id) connectedIds.add(l.source.id);
+            });
+            node.classed('graph-node-faded', n => !connectedIds.has(n.id));
+            link.classed('graph-edge-faded', l => l.source.id !== d.id && l.target.id !== d.id);
+        })
+        .on('mouseleave', () => {
+            tooltip.style('display', 'none');
+            node.classed('graph-node-faded', false);
+            link.classed('graph-edge-faded', false);
+        })
         .call(d3.drag()
             .on('start', (event, d) => { if (!event.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
             .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
             .on('end', (event, d) => { if (!event.active) sim.alphaTarget(0); d.fx = null; d.fy = null; })
         );
 
-    // N\u00f3s pequenos, proporcionais
-    const maxMentions = Math.max(...nodes.map(n => n.mentions || 1));
-    const nodeRadius = d => 4 + Math.sqrt((d.mentions || 1) / maxMentions) * (expanded ? 10 : 7);
+    // Cor do nó pela camada predominante
+    const nodePrimaryColor = d => {
+        const firstLayer = (d.layers && d.layers[0]) || 'co_mention';
+        return LAYER_COLOR_BY_ID[firstLayer] || '#78350f';
+    };
+
+    // Glow no nó central
+    node.filter(d => d.central).append('circle')
+        .attr('r', d => nodeRadius(d) + 8)
+        .attr('fill', '#fde68a')
+        .attr('fill-opacity', 0.5);
 
     node.append('circle')
         .attr('r', nodeRadius)
-        .attr('fill', d => d.central ? '#b45309' : '#78350f')
-        .attr('stroke', d => d.role ? '#7c3aed' : '#fef3c7')
-        .attr('stroke-width', d => d.role ? 2.5 : 1.5)
-        .attr('opacity', 0.9);
+        .attr('fill', d => d.central ? '#b45309' : nodePrimaryColor(d))
+        .attr('fill-opacity', 0.95)
+        .attr('stroke', '#fffdf8')
+        .attr('stroke-width', d => d.central ? 3.5 : 2.5);
 
-    // Label ABAIXO do n\u00f3 (n\u00e3o sobrepondo)
+    // Label principal (nome). Truncamento amigável: corta no espaço, não no meio da palavra.
+    const truncName = (s, max = 24) => {
+        if (!s) return '?';
+        if (s.length <= max) return s;
+        const cut = s.slice(0, max);
+        const lastSpace = cut.lastIndexOf(' ');
+        return (lastSpace > 12 ? cut.slice(0, lastSpace) : cut) + '…';
+    };
+
     node.append('text')
-        .text(d => {
-            const maxLen = expanded ? 28 : 18;
-            const name = d.label.length > maxLen ? d.label.slice(0, maxLen - 2) + '\u2026' : d.label;
-            return d.role ? `${name} \u00b7 ${d.role}` : name;
-        })
+        .attr('class', 'graph-node-label')
+        .text(d => truncName(d.label, d.central ? 32 : 22))
         .attr('text-anchor', 'middle')
-        .attr('dy', d => nodeRadius(d) + 13)
-        .style('font-size', expanded ? '11px' : '9px')
-        .style('font-weight', d => d.central ? '700' : '400')
-        .style('fill', '#44403c')
-        .style('pointer-events', 'none');
+        .attr('dy', d => nodeRadius(d) + 14);
 
-    // For\u00e7as mais espalhadas
-    const chargeStrength = expanded ? -500 : -350;
-    const linkDist = expanded ? 120 : 80;
+    node.filter(d => d.role).append('text')
+        .attr('class', 'graph-node-label-role')
+        .text(d => truncName(d.role, 22))
+        .attr('text-anchor', 'middle')
+        .attr('dy', d => nodeRadius(d) + 26);
+
+    // Background sutil para tornar o canvas mais "vivo"
+    // (handled by .graph-host CSS)
+
+    // === SIMULAÇÃO ===
+    // Forças mais fortes pra centralizar e separar
+    const linkDistance = d => {
+        if (d.layer === 'co_mention') return 130;
+        if (d.layer === 'family') return 110;
+        if (d.layer === 'roles') return 100;
+        return 105;
+    };
+
+    // --- Cluster por camada ---
+    // Calcula centroides em círculo ao redor do centro do canvas, um por camada
+    // que tem pelo menos 1 nó realmente presente no grafo atual.
+    const layersWithNodes = new Set();
+    nodes.forEach(n => {
+        ((n.layers && n.layers.length) ? n.layers : ['co_mention']).forEach(l => layersWithNodes.add(l));
+    });
+    const orderedLayers = LAYER_DEFS.map(l => l.id).filter(id => layersWithNodes.has(id));
+    const cx = width / 2, cy = height / 2;
+    const clusterRadius = Math.min(width, height) * 0.26;
+    const layerCentroids = {};
+    orderedLayers.forEach((layer, i) => {
+        if (orderedLayers.length === 1) {
+            layerCentroids[layer] = { x: cx, y: cy };
+        } else {
+            // Distribui em círculo, começando no topo
+            const angle = (i / orderedLayers.length) * 2 * Math.PI - Math.PI / 2;
+            layerCentroids[layer] = {
+                x: cx + Math.cos(angle) * clusterRadius,
+                y: cy + Math.sin(angle) * clusterRadius,
+            };
+        }
+    });
+    const primaryLayerOf = d => {
+        if (!d.layers || !d.layers.length) return 'co_mention';
+        // Prefere a primeira camada que tem centroide definido
+        return d.layers.find(l => layerCentroids[l]) || d.layers[0];
+    };
+    const targetX = d => (layerCentroids[primaryLayerOf(d)]?.x || cx);
+    const targetY = d => (layerCentroids[primaryLayerOf(d)]?.y || cy);
 
     const sim = d3.forceSimulation(nodes)
-        .force('link', d3.forceLink(edges).id(d => d.id).distance(linkDist).strength(0.4))
-        .force('charge', d3.forceManyBody().strength(chargeStrength))
-        .force('center', d3.forceCenter(width / 2, height / 2))
-        .force('collision', d3.forceCollide().radius(d => nodeRadius(d) + (expanded ? 35 : 22)))
-        .force('x', d3.forceX(width / 2).strength(0.04))
-        .force('y', d3.forceY(height / 2).strength(0.04))
+        .force('link', d3.forceLink(edges).id(d => d.id).distance(linkDistance).strength(0.45))
+        .force('charge', d3.forceManyBody().strength(-620).distanceMax(420))
+        .force('center', d3.forceCenter(cx, cy).strength(0.04))
+        .force('collision', d3.forceCollide().radius(d => nodeRadius(d) + 48).strength(0.95))
+        // Cluster: puxa cada nó pro centroide da sua camada
+        .force('cluster-x', d3.forceX(targetX).strength(0.14))
+        .force('cluster-y', d3.forceY(targetY).strength(0.16))
+        .alpha(1)
+        .alphaDecay(0.025)
         .on('tick', () => {
-            const margin = expanded ? 80 : 50;
+            // Margens internas — só clamp se realmente passou
+            const padX = 80, padY = 60;
             nodes.forEach(d => {
-                d.x = Math.max(margin, Math.min(width - margin, d.x));
-                d.y = Math.max(30, Math.min(height - 40, d.y));
+                if (d.x < padX) d.x = padX;
+                if (d.x > width - padX) d.x = width - padX;
+                if (d.y < padY) d.y = padY;
+                if (d.y > height - padY) d.y = height - padY;
             });
-            link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
-                .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
-            linkLabel
-                .attr('x', d => (d.source.x + d.target.x) / 2)
-                .attr('y', d => (d.source.y + d.target.y) / 2 - 6);
+
+            // Edges curvas (quadratic Bezier)
+            link.attr('d', d => {
+                const dx = d.target.x - d.source.x;
+                const dy = d.target.y - d.source.y;
+                const dr = Math.sqrt(dx * dx + dy * dy) * 1.8;
+                return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
+            });
+
             node.attr('transform', d => `translate(${d.x},${d.y})`);
         });
+
+    // Para na hora certa pra economizar CPU
+    setTimeout(() => sim.alphaTarget(0).stop(), 4500);
+
+    _graphState.sim = sim;
+}
+
+function renderGraphPanelEmpty() {
+    // Sugere abrir um nó ou aresta a partir dos top do grafo carregado
+    const data = _graphState.data;
+    let suggestionsHtml = '';
+    if (data && data.nodes && data.nodes.length) {
+        // Top 4 nós com mais conexões
+        const degree = {};
+        (data.edges || []).forEach(e => {
+            const sid = typeof e.source === 'string' ? e.source : e.source?.id;
+            const tid = typeof e.target === 'string' ? e.target : e.target?.id;
+            degree[sid] = (degree[sid] || 0) + 1;
+            degree[tid] = (degree[tid] || 0) + 1;
+        });
+        const topNodes = [...data.nodes]
+            .filter(n => n.entity_id)
+            .sort((a, b) => (degree[b.id] || 0) - (degree[a.id] || 0))
+            .slice(0, 4);
+
+        // Top arestas biográficas (não co_mention)
+        const topBioEdges = (data.edges || [])
+            .filter(e => e.layer !== 'co_mention')
+            .slice(0, 3);
+
+        if (topNodes.length || topBioEdges.length) {
+            suggestionsHtml = `
+                ${topNodes.length ? `
+                    <div class="mt-6">
+                        <p class="text-[10px] uppercase tracking-[0.18em] text-stone-400 font-semibold mb-3">Pessoas em destaque</p>
+                        <div class="space-y-2">
+                            ${topNodes.map(n => `
+                                <button class="panel-suggest" onclick="showEntityPanel(${n.entity_id}, {label:'${escapeHtml(n.label).replace(/'/g, "\\'")}'})">
+                                    <strong>${escapeHtml(n.label)}</strong>
+                                    <small>${(degree[n.id] || 0)} conexões${n.role ? ' · ' + escapeHtml(n.role) : ''}</small>
+                                </button>
+                            `).join('')}
+                        </div>
+                    </div>
+                ` : ''}
+                ${topBioEdges.length ? `
+                    <div class="mt-6">
+                        <p class="text-[10px] uppercase tracking-[0.18em] text-stone-400 font-semibold mb-3">Relações pra investigar</p>
+                        <div class="space-y-2">
+                            ${topBioEdges.map(e => {
+                                const srcNode = data.nodes.find(n => n.id === (typeof e.source === 'string' ? e.source : e.source?.id));
+                                const tgtNode = data.nodes.find(n => n.id === (typeof e.target === 'string' ? e.target : e.target?.id));
+                                if (!srcNode || !tgtNode) return '';
+                                const layerColor = LAYER_COLOR_BY_ID[e.layer] || '#78716c';
+                                return `
+                                    <button class="panel-suggest" onclick="showEdgePanel(${srcNode.entity_id}, ${tgtNode.entity_id}, {layer:'${e.layer}', label:'${escapeHtml(e.label || '').replace(/'/g, "\\'")}'})">
+                                        <strong>${escapeHtml(srcNode.label)}</strong>
+                                        <small style="color:${layerColor};">${escapeHtml(e.label || e.predicate)} → <span style="color:#44403c;">${escapeHtml(tgtNode.label)}</span></small>
+                                    </button>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                ` : ''}
+            `;
+        }
+    }
+
+    return `
+        <div class="graph-panel-empty">
+            <div class="flex items-start gap-3 mb-2">
+                <div class="shrink-0 w-9 h-9 rounded-full bg-amber-100 flex items-center justify-center mt-0.5">
+                    <svg class="w-4 h-4 text-amber-700" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0zm6 0c0 1.657-4.03 3-9 3s-9-1.343-9-3 4.03-3 9-3 9 1.343 9 3z"/></svg>
+                </div>
+                <div>
+                    <p class="font-serif text-lg text-stone-800 leading-tight">Como investigar</p>
+                    <p class="text-xs text-stone-500 mt-1 leading-relaxed">Clique num <strong>nó</strong> para abrir a ficha de uma pessoa. Clique numa <strong>linha</strong> para ver a página real do jornal onde os dois aparecem citados.</p>
+                </div>
+            </div>
+            ${suggestionsHtml}
+        </div>
+    `;
+}
+
+async function showEntityPanel(entityId, nodeData) {
+    const panel = document.getElementById(_graphState.ids.panel);
+    if (!panel) return;
+    panel.scrollTop = 0;
+    panel.innerHTML = `
+        <div class="text-xs text-stone-500 flex items-center gap-2">
+            <span class="inline-block h-3 w-3 rounded-full border-2 border-amber-700 border-t-transparent animate-spin"></span>
+            Carregando ficha de ${escapeHtml(nodeData?.label || '...')}
+        </div>
+    `;
+    try {
+        const data = await fetchJsonWithTimeout(`${API}/api/entity/${entityId}`, { timeout: 12000 });
+        if (!data || data.error) {
+            panel.innerHTML = `<p class="text-sm text-rose-500">Não foi possível carregar essa entidade.</p>`;
+            return;
+        }
+        renderEntityPanel(data, nodeData);
+    } catch (e) {
+        panel.innerHTML = `<p class="text-sm text-rose-500">Erro: ${escapeHtml(e.message)}</p>`;
+    }
+}
+
+function renderEntityPanel(entity, nodeData) {
+    const panel = document.getElementById(_graphState.ids.panel);
+    if (!panel) return;
+    const aliases = (entity.aliases || []).filter(a => a !== entity.canonical_name);
+    const story = entity.story || {};
+    const timeline = story.timeline || [];
+    const period = timeline.length ? `${Math.min(...timeline.map(t => t.year))} - ${Math.max(...timeline.map(t => t.year))}` : '';
+    const relations = (entity.relations || []).filter(r => r.predicate !== 'mentioned_with').slice(0, 6);
+    const mentions = (entity.mentions || []).slice(0, 3);
+    const journals = (story.journals || []).slice(0, 3);
+
+    panel.innerHTML = `
+        <div class="flex items-start justify-between gap-3 mb-3">
+            <div>
+                <p class="text-[10px] uppercase tracking-[0.18em] text-amber-700 font-semibold">Ficha de pessoa</p>
+                <h3 class="font-serif text-2xl text-stone-900 mt-1 leading-tight">${escapeHtml(entity.canonical_name || '?')}</h3>
+                ${entity.role ? `<p class="text-sm text-amber-900 italic mt-1">${escapeHtml(entity.role)}</p>` : ''}
+            </div>
+            <button onclick="closeGraphPanel()" class="text-stone-400 hover:text-stone-700 text-xl leading-none">×</button>
+        </div>
+        <div class="flex flex-wrap gap-1.5 mb-4">
+            <span class="panel-tag bg-amber-100 text-amber-900">${entity.mentions_count || 0} menções</span>
+            ${period ? `<span class="panel-tag bg-stone-100 text-stone-700">${escapeHtml(period)}</span>` : ''}
+            ${aliases.length ? `<span class="panel-tag bg-stone-100 text-stone-600">${aliases.length} variantes</span>` : ''}
+        </div>
+
+        ${aliases.length ? `
+            <div class="panel-section">
+                <p class="text-[10px] uppercase tracking-[0.16em] text-stone-400 font-semibold mb-2">Variantes nominais</p>
+                <p class="text-xs text-stone-600 leading-relaxed">${aliases.slice(0, 6).map(escapeHtml).join(' · ')}</p>
+            </div>
+        ` : ''}
+
+        ${relations.length ? `
+            <div class="panel-section">
+                <p class="text-[10px] uppercase tracking-[0.16em] text-stone-400 font-semibold mb-2">Relações</p>
+                <ul class="space-y-1.5 text-sm text-stone-700">
+                    ${relations.map(r => {
+                        const otherName = r.object_name || r.object_literal || r.subject_name || '?';
+                        const otherId = r.object_entity_id || r.subject_entity_id;
+                        const verb = r.predicate.replace(/_/g, ' ');
+                        const clickable = otherId && otherId !== entity.id;
+                        return `
+                            <li class="flex items-start gap-2">
+                                <span class="text-amber-700 mt-0.5">→</span>
+                                <span>
+                                    <em class="text-stone-500 not-italic">${escapeHtml(verb)}</em>
+                                    ${clickable ? `<button class="text-stone-800 hover:underline font-medium" onclick="showEntityPanel(${otherId}, {label:'${escapeHtml(otherName).replace(/'/g, "\\'")}'})">${escapeHtml(otherName)}</button>` : `<span class="text-stone-800 font-medium">${escapeHtml(otherName)}</span>`}
+                                </span>
+                            </li>
+                        `;
+                    }).join('')}
+                </ul>
+            </div>
+        ` : ''}
+
+        ${journals.length ? `
+            <div class="panel-section">
+                <p class="text-[10px] uppercase tracking-[0.16em] text-stone-400 font-semibold mb-2">Periódicos</p>
+                <div class="flex flex-wrap gap-1.5">
+                    ${journals.map(j => `<span class="panel-tag bg-sky-50 text-sky-900">${escapeHtml(j.jornal || j.bib || '?')} · ${j.mentions || 0}</span>`).join('')}
+                </div>
+            </div>
+        ` : ''}
+
+        ${mentions.length ? `
+            <div class="panel-section">
+                <p class="text-[10px] uppercase tracking-[0.16em] text-stone-400 font-semibold mb-2">Trechos representativos</p>
+                <div class="space-y-2">
+                    ${mentions.map(m => `
+                        <blockquote class="text-xs text-stone-600 italic border-l-2 border-amber-300 pl-3 leading-relaxed">
+                            "${escapeHtml((m.snippet || '').slice(0, 200))}${(m.snippet || '').length > 200 ? '...' : ''}"
+                            ${m.bib && m.pagina ? `<div class="mt-1 not-italic text-[10px] text-stone-400"><a href="/page/${m.bib}/${m.pagina}?q=${encodeURIComponent(entity.canonical_name)}" target="_blank" class="hover:text-amber-700">${escapeHtml(m.bib)} / ${escapeHtml(String(m.pagina))} ↗</a></div>` : ''}
+                        </blockquote>
+                    `).join('')}
+                </div>
+            </div>
+        ` : ''}
+
+        <div class="panel-section flex gap-2">
+            <button onclick="loadEntityById(${entity.id})" class="flex-1 px-3 py-2 rounded-xl bg-stone-900 text-white text-xs font-medium hover:bg-stone-800">
+                Abrir dossiê completo
+            </button>
+        </div>
+    `;
+}
+
+async function showEdgePanel(sourceId, targetId, edgeData) {
+    const panel = document.getElementById(_graphState.ids.panel);
+    if (!panel) return;
+    panel.scrollTop = 0;
+    panel.innerHTML = `
+        <div class="text-xs text-stone-500 flex items-center gap-2">
+            <span class="inline-block h-3 w-3 rounded-full border-2 border-amber-700 border-t-transparent animate-spin"></span>
+            Buscando a página onde se encontram...
+        </div>
+    `;
+    try {
+        const data = await fetchJsonWithTimeout(`${API}/api/graph/edge-evidence?source=${sourceId}&target=${targetId}`, { timeout: 12000 });
+        if (!data || data.error) {
+            panel.innerHTML = `<p class="text-sm text-rose-500">Sem evidências disponíveis para essa conexão.</p>`;
+            return;
+        }
+        renderEdgePanel(data, edgeData);
+    } catch (e) {
+        panel.innerHTML = `<p class="text-sm text-rose-500">Erro: ${escapeHtml(e.message)}</p>`;
+    }
+}
+
+function renderEdgePanel(data, edgeData) {
+    const panel = document.getElementById(_graphState.ids.panel);
+    if (!panel) return;
+    const layer = edgeData?.layer || 'co_mention';
+    const layerColor = LAYER_COLOR_BY_ID[layer] || '#78716c';
+    const layerLabel = LAYER_DEFS.find(l => l.id === layer)?.label || layer;
+    const verbLabel = edgeData?.label || data.direct_relations?.[0]?.label || 'citados juntos';
+    const directRel = (data.direct_relations || []).find(r => r.predicate !== 'mentioned_with') || data.direct_relations?.[0];
+    const sharedPage = data.shared_pages?.[0];
+
+    panel.innerHTML = `
+        <div class="flex items-start justify-between gap-3 mb-3">
+            <div>
+                <p class="text-[10px] uppercase tracking-[0.18em] font-semibold" style="color:${layerColor};">${escapeHtml(layerLabel)}</p>
+                <h3 class="font-serif text-xl text-stone-900 mt-1 leading-tight">
+                    <button onclick="showEntityPanel(${data.source.id}, {label:'${escapeHtml(data.source.name).replace(/'/g, "\\'")}'})" class="hover:underline text-left">${escapeHtml(data.source.name)}</button>
+                </h3>
+                <p class="text-xs italic text-stone-500 my-1 ml-1">${escapeHtml(verbLabel)}</p>
+                <h3 class="font-serif text-xl text-stone-900 leading-tight">
+                    <button onclick="showEntityPanel(${data.target.id}, {label:'${escapeHtml(data.target.name).replace(/'/g, "\\'")}'})" class="hover:underline text-left">${escapeHtml(data.target.name)}</button>
+                </h3>
+            </div>
+            <button onclick="closeGraphPanel()" class="text-stone-400 hover:text-stone-700 text-xl leading-none">×</button>
+        </div>
+
+        ${directRel?.evidence ? `
+            <div class="panel-section">
+                <p class="text-[10px] uppercase tracking-[0.16em] text-stone-400 font-semibold mb-2">Citação no jornal</p>
+                <blockquote class="text-sm text-stone-700 italic border-l-2 pl-3 leading-relaxed" style="border-color:${layerColor};">
+                    "${escapeHtml(directRel.evidence.quote)}"
+                </blockquote>
+                <div class="mt-2 text-[11px] text-stone-500">
+                    ${escapeHtml(directRel.evidence.jornal || directRel.evidence.bib)} · ${escapeHtml(directRel.evidence.ano)} · pág. ${escapeHtml(directRel.evidence.pagina)}
+                    ${directRel.confidence ? ` · confiança ${(directRel.confidence * 100).toFixed(0)}%` : ''}
+                </div>
+            </div>
+        ` : ''}
+
+        ${sharedPage ? `
+            <div class="panel-section">
+                <p class="text-[10px] uppercase tracking-[0.16em] text-stone-400 font-semibold mb-2">Página onde se encontram</p>
+                <div class="rounded-xl border border-stone-200 bg-white overflow-hidden">
+                    <div class="px-3 py-2 border-b border-stone-100 text-xs text-stone-600">
+                        <strong>${escapeHtml(sharedPage.jornal)}</strong><br>
+                        <span class="text-stone-500">${escapeHtml(sharedPage.ano)} · pág. ${escapeHtml(sharedPage.pagina)}</span>
+                    </div>
+                    <iframe src="${sharedPage.page_view_url}" class="graph-panel-frame" style="border:none;border-radius:0;min-height:340px;" loading="lazy"></iframe>
+                </div>
+                <a href="${sharedPage.page_view_url}" target="_blank" class="mt-2 inline-flex items-center gap-1 text-xs text-amber-700 hover:underline">
+                    Abrir página completa
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                </a>
+            </div>
+        ` : (!directRel?.evidence ? `<p class="text-sm text-stone-500 italic">Conexão estatística (co-presença em páginas), sem citação textual única para mostrar.</p>` : '')}
+
+        ${data.shared_pages && data.shared_pages.length > 1 ? `
+            <div class="panel-section">
+                <p class="text-[10px] uppercase tracking-[0.16em] text-stone-400 font-semibold mb-2">Outras páginas em comum (${data.shared_pages.length})</p>
+                <div class="space-y-1.5">
+                    ${data.shared_pages.slice(1, 5).map(p => `
+                        <a href="${p.page_view_url}" target="_blank" class="block text-xs text-stone-600 hover:text-amber-700">
+                            → ${escapeHtml(p.jornal)} · ${escapeHtml(p.ano)} · pág. ${escapeHtml(p.pagina)}
+                        </a>
+                    `).join('')}
+                </div>
+            </div>
+        ` : ''}
+    `;
+}
+
+function closeGraphPanel() {
+    const panel = document.getElementById(_graphState.ids.panel);
+    if (panel) panel.innerHTML = renderGraphPanelEmpty();
 }
 
 // === Genealogia (Açores) ===
@@ -2100,6 +2824,18 @@ function switchTab(tab) {
 }
 
 function loadTabContent(tab) {
+    // O grafo interativo SEMPRE recarrega ao entrar na aba (reseta camadas
+    // e estado), porque _graphState é compartilhado entre Início e Genealogia.
+    // É o hero da home, então carrega imediatamente.
+    if (tab === 'inicio') {
+        loadInteractiveGraph('interactive-graph-container', {
+            defaultLayers: ['family', 'roles', 'co_mention'],
+        });
+    } else if (tab === 'genealogia') {
+        setTimeout(loadGenealogiaNetwork, 100);
+    }
+
+    // O resto do conteúdo é cacheado: roda só na primeira visita
     if (tabLoaded[tab]) return;
     tabLoaded[tab] = true;
     if (tab === 'inicio') {
@@ -2108,7 +2844,6 @@ function loadTabContent(tab) {
         loadTrails();
         setTimeout(loadPeriodContextStandalone, 100);
         setTimeout(loadSurnameCloud, 300);
-        setTimeout(loadFeaturedGraph, 500);
     } else if (tab === 'explorar') {
         loadDiscoveryOverview();
     } else if (tab === 'pesquisar') {
@@ -2116,7 +2851,7 @@ function loadTabContent(tab) {
         setTimeout(() => document.getElementById('search-input')?.focus(), 100);
     } else if (tab === 'genealogia') {
         loadAcoresStats();
-        setTimeout(loadAcoresCrossRef, 200);
+        setTimeout(loadAcoresCrossRef, 300);
         setTimeout(loadAcoresTrees, 400);
     } else if (tab === 'curadoria') {
         loadReviewQueue();

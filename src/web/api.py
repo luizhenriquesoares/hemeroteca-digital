@@ -490,6 +490,37 @@ async def discovery_featured_graph(
     return _cache_set(cache_key, graph)
 
 
+@app.get("/api/discovery/graph")
+async def discovery_layered_graph(
+    layers: str = Query("family,roles,co_mention", description="Camadas separadas por vírgula"),
+    limit: int = Query(30, ge=5, le=80, description="Número máximo de nós"),
+):
+    """Grafo interativo com filtro por camadas semânticas (família, cargos, justiça, etc)."""
+    layers_list = sorted({l.strip() for l in layers.split(",") if l.strip()})
+    cache_key = ("layered_graph", tuple(layers_list), limit)
+    cached = _cache_get(cache_key, ttl_seconds=120.0)
+    if cached is not None:
+        return cached
+    from src.structured.graph_store import get_layered_graph
+    data = await run_in_threadpool(get_layered_graph, layers=layers_list, limit=limit)
+    return _cache_set(cache_key, data)
+
+
+@app.get("/api/graph/edge-evidence")
+async def graph_edge_evidence(
+    source: int = Query(..., ge=1, description="ID da entidade de origem"),
+    target: int = Query(..., ge=1, description="ID da entidade de destino"),
+):
+    """Evidências documentais para uma aresta do grafo (página onde aparecem juntas + relações diretas)."""
+    cache_key = ("edge_evidence", source, target)
+    cached = _cache_get(cache_key, ttl_seconds=300.0)
+    if cached is not None:
+        return cached
+    from src.structured.graph_store import get_edge_evidence
+    data = await run_in_threadpool(get_edge_evidence, source, target)
+    return _cache_set(cache_key, data)
+
+
 @app.get("/api/discovery/surname-cloud")
 async def discovery_surname_cloud(
     limit: int = Query(40, ge=10, le=100, description="Número de sobrenomes"),
