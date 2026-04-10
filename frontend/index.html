@@ -1972,8 +1972,8 @@ async function loadInteractiveGraph(hostId = 'interactive-graph-container', opti
                 </div>
             </div>
             <div class="grid lg:grid-cols-[1.7fr_1fr]">
-                <div class="relative" style="min-height:560px;">
-                    <div id="${_graphState.ids.svg}" class="graph-host" style="height:560px;border-right:1px solid #e7e5e4;"></div>
+                <div class="relative" style="min-height:720px;">
+                    <div id="${_graphState.ids.svg}" class="graph-host" style="height:720px;border-right:1px solid #e7e5e4;"></div>
                     <!-- Mini-legenda das camadas ativas -->
                     <div id="${prefix}-legend" class="graph-legend hidden">
                         <div class="graph-legend-title">Camadas ativas</div>
@@ -1996,7 +1996,7 @@ async function loadInteractiveGraph(hostId = 'interactive-graph-container', opti
                         </div>
                     </div>
                 </div>
-                <aside id="${_graphState.ids.panel}" class="graph-side-panel p-6 md:p-7 overflow-y-auto" style="max-height:560px;">
+                <aside id="${_graphState.ids.panel}" class="graph-side-panel p-6 md:p-7 overflow-y-auto" style="max-height:720px;">
                     ${renderGraphPanelEmpty()}
                 </aside>
             </div>
@@ -2103,7 +2103,7 @@ async function refreshInteractiveGraph() {
     try {
         const layers = Array.from(_graphState.activeLayers).join(',');
         // Limit maior na vista global pra densidade visual; ego-network usa menos
-        const limit = _graphState.focusEntityId ? 30 : 60;
+        const limit = _graphState.focusEntityId ? 24 : 32;
         let url = `${API}/api/discovery/graph?layers=${encodeURIComponent(layers)}&limit=${limit}`;
         if (_graphState.focusEntityId) {
             url += `&focus=${_graphState.focusEntityId}&depth=2`;
@@ -2252,8 +2252,8 @@ function toggleGraphCardFullscreen(hostId) {
         // Restaura altura padrão dos hosts internos
         const svgHost = document.getElementById(_graphState.ids.svg);
         const panel = document.getElementById(_graphState.ids.panel);
-        if (svgHost) svgHost.style.height = '560px';
-        if (panel) panel.style.maxHeight = '560px';
+        if (svgHost) svgHost.style.height = '720px';
+        if (panel) panel.style.maxHeight = '720px';
         // Atualiza label do botão
         const expandBtn = card.querySelector('.graph-expand-btn');
         if (expandBtn) {
@@ -2462,9 +2462,18 @@ function renderInteractiveGraphD3(data) {
             link.classed('graph-edge-faded', false);
         })
         .call(d3.drag()
-            .on('start', (event, d) => { if (!event.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+            .on('start', (event, d) => {
+                // Drag mais "suave" — não reinicia com alpha alto
+                if (!event.active) sim.alphaTarget(0.15).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            })
             .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
-            .on('end', (event, d) => { if (!event.active) sim.alphaTarget(0); d.fx = null; d.fy = null; })
+            .on('end', (event, d) => {
+                if (!event.active) sim.alphaTarget(0);
+                // Mantém posição fixada após drag (não solta)
+                // d.fx e d.fy permanecem
+            })
         );
 
     // Cor do nó pela camada predominante
@@ -2518,7 +2527,7 @@ function renderInteractiveGraphD3(data) {
         compCentroids[find(components[0][0].id)] = { x: cx, y: cy };
     } else {
         // O maior componente fica no centro; os menores em círculo ao redor
-        const ringRadius = Math.min(width, height) * 0.32;
+        const ringRadius = Math.min(width, height) * 0.36;
         components.forEach((comp, i) => {
             const root = find(comp[0].id);
             if (i === 0) {
@@ -2584,27 +2593,28 @@ function renderInteractiveGraphD3(data) {
         .attr('dy', d => nodeRadius(d) + 26);
 
     // === SIMULAÇÃO com forças por COMPONENTE ===
+    // Calibrado para 32 nós em 720px de altura — mais espaço por nó
     const linkDistance = d => {
-        if (d.layer === 'co_mention') return 100;
-        if (d.layer === 'family') return 75;
-        if (d.layer === 'roles') return 80;
-        return 85;
+        if (d.layer === 'co_mention') return 130;
+        if (d.layer === 'family') return 95;
+        if (d.layer === 'roles') return 100;
+        return 105;
     };
 
     const sim = d3.forceSimulation(nodes)
-        .force('link', d3.forceLink(edges).id(d => d.id).distance(linkDistance).strength(0.55))
-        // Repulsão forte mas com decay rápido (não atrai longe)
-        .force('charge', d3.forceManyBody().strength(-720).distanceMax(380))
+        .force('link', d3.forceLink(edges).id(d => d.id).distance(linkDistance).strength(0.6))
+        // Repulsão forte
+        .force('charge', d3.forceManyBody().strength(-900).distanceMax(450))
         // Collision generosa pra labels não se sobreporem
-        .force('collision', d3.forceCollide().radius(d => nodeRadius(d) + 65).strength(0.98))
-        // Cada nó é puxado pro centroide do SEU componente, não do canvas inteiro
-        .force('cluster-x', d3.forceX(d => d._cx).strength(0.18))
-        .force('cluster-y', d3.forceY(d => d._cy).strength(0.20))
+        .force('collision', d3.forceCollide().radius(d => nodeRadius(d) + 70).strength(1))
+        // Cada nó é puxado pro centroide do SEU componente
+        .force('cluster-x', d3.forceX(d => d._cx).strength(0.22))
+        .force('cluster-y', d3.forceY(d => d._cy).strength(0.24))
         .alpha(1)
-        .alphaDecay(0.022)
+        .alphaDecay(0.045)
         .on('tick', () => {
             // Margens generosas — usa toda a tela
-            const padX = 90, padY = 70;
+            const padX = 100, padY = 80;
             nodes.forEach(d => {
                 if (d.x < padX) d.x = padX;
                 if (d.x > width - padX) d.x = width - padX;
@@ -2644,7 +2654,12 @@ function renderInteractiveGraphD3(data) {
                 });
         });
 
-    setTimeout(() => sim.alphaTarget(0).stop(), 5000);
+    // Para a simulação rapidamente — assenta em ~3s e congela
+    setTimeout(() => {
+        sim.alphaTarget(0);
+        sim.alpha(0);
+        sim.stop();
+    }, 3000);
 
     _graphState.sim = sim;
 }
