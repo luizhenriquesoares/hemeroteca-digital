@@ -155,9 +155,16 @@ def _cache_set(key: tuple, value: object):
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    """Serve o frontend."""
+    """Serve o frontend (sempre fresco — sem cache do browser)."""
     frontend_path = Path(__file__).parent.parent.parent / "frontend" / "index.html"
-    return frontend_path.read_text(encoding="utf-8")
+    return HTMLResponse(
+        content=frontend_path.read_text(encoding="utf-8"),
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.get("/api/buscar")

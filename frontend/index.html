@@ -2102,11 +2102,13 @@ async function refreshInteractiveGraph() {
     if (overlay) overlay.classList.remove('hidden');
     try {
         const layers = Array.from(_graphState.activeLayers).join(',');
-        let url = `${API}/api/discovery/graph?layers=${encodeURIComponent(layers)}&limit=22`;
+        // Limit maior na vista global pra densidade visual; ego-network usa menos
+        const limit = _graphState.focusEntityId ? 30 : 60;
+        let url = `${API}/api/discovery/graph?layers=${encodeURIComponent(layers)}&limit=${limit}`;
         if (_graphState.focusEntityId) {
             url += `&focus=${_graphState.focusEntityId}&depth=2`;
         }
-        const data = await fetchJsonWithTimeout(url, { timeout: 15000 });
+        const data = await fetchJsonWithTimeout(url, { timeout: 30000 });
         _graphState.data = data;
         if (statsLine) {
             const focusLabel = _graphState.focusEntityId ? ' (ego-network)' : '';
