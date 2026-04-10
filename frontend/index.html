@@ -2479,6 +2479,82 @@ function renderInteractiveGraphD3(data) {
         .attr('fill', '#fde68a')
         .attr('fill-opacity', 0.5);
 
+    // === Cluster por componente conectado (Union-Find) ===
+    // Detecta "ilhas" de pessoas que se conhecem e dá a cada uma uma posição
+    // alvo distinta, separadas espacialmente. Isso quebra o "hairball".
+    const parent = {};
+    nodes.forEach(n => { parent[n.id] = n.id; });
+    const find = (x) => {
+        while (parent[x] !== x) {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        return x;
+    };
+    const union = (a, b) => {
+        const ra = find(a), rb = find(b);
+        if (ra !== rb) parent[ra] = rb;
+    };
+    edges.forEach(e => {
+        const sid = typeof e.source === 'string' ? e.source : e.source.id;
+        const tid = typeof e.target === 'string' ? e.target : e.target.id;
+        union(sid, tid);
+    });
+
+    // Agrupa nós por componente
+    const componentMap = {};
+    nodes.forEach(n => {
+        const root = find(n.id);
+        if (!componentMap[root]) componentMap[root] = [];
+        componentMap[root].push(n);
+    });
+    // Ordena componentes por tamanho (maior fica mais central)
+    const components = Object.values(componentMap).sort((a, b) => b.length - a.length);
+
+    // Atribui um centroide a cada componente
+    const cx = width / 2, cy = height / 2;
+    const compCentroids = {};
+    if (components.length === 1) {
+        compCentroids[find(components[0][0].id)] = { x: cx, y: cy };
+    } else {
+        // O maior componente fica no centro; os menores em círculo ao redor
+        const ringRadius = Math.min(width, height) * 0.32;
+        components.forEach((comp, i) => {
+            const root = find(comp[0].id);
+            if (i === 0) {
+                compCentroids[root] = { x: cx, y: cy };
+            } else {
+                // Distribui o resto em círculo ao redor
+                const others = components.length - 1;
+                const angle = ((i - 1) / others) * 2 * Math.PI - Math.PI / 2;
+                compCentroids[root] = {
+                    x: cx + Math.cos(angle) * ringRadius,
+                    y: cy + Math.sin(angle) * ringRadius,
+                };
+            }
+        });
+    }
+
+    // Mapa nó → centroide
+    nodes.forEach(n => {
+        const root = find(n.id);
+        n._cx = compCentroids[root].x;
+        n._cy = compCentroids[root].y;
+        n._compSize = componentMap[root].length;
+    });
+
+    // === Background dos componentes (hulls) ===
+    // Desenha um círculo translúcido por componente com 3+ nós, dando dica visual
+    const hullColors = ['#fef3c7', '#fee2e2', '#dbeafe', '#dcfce7', '#ede9fe', '#ffedd5', '#cffafe'];
+    const hullsLayer = root.append('g').attr('class', 'hulls').lower();
+    const hullCircles = hullsLayer.selectAll('circle')
+        .data(components.filter(c => c.length >= 2))
+        .join('circle')
+        .attr('fill', (_, i) => hullColors[i % hullColors.length])
+        .attr('fill-opacity', 0.35)
+        .attr('stroke', 'none');
+
+    // === Labels e círculos dos nós ===
     node.append('circle')
         .attr('r', nodeRadius)
         .attr('fill', d => d.central ? '#b45309' : nodePrimaryColor(d))
@@ -2486,83 +2562,49 @@ function renderInteractiveGraphD3(data) {
         .attr('stroke', '#fffdf8')
         .attr('stroke-width', d => d.central ? 3.5 : 2.5);
 
-    // Label principal (nome). Truncamento amigável: corta no espaço, não no meio da palavra.
-    const truncName = (s, max = 24) => {
+    // Truncamento mais agressivo: 14 chars para nós normais, 20 para central
+    const truncName = (s, max = 14) => {
         if (!s) return '?';
         if (s.length <= max) return s;
         const cut = s.slice(0, max);
         const lastSpace = cut.lastIndexOf(' ');
-        return (lastSpace > 12 ? cut.slice(0, lastSpace) : cut) + '…';
+        return (lastSpace > 6 ? cut.slice(0, lastSpace) : cut) + '…';
     };
 
     node.append('text')
         .attr('class', 'graph-node-label')
-        .text(d => truncName(d.label, d.central ? 32 : 22))
+        .text(d => truncName(d.label, d.central ? 22 : 14))
         .attr('text-anchor', 'middle')
         .attr('dy', d => nodeRadius(d) + 14);
 
     node.filter(d => d.role).append('text')
         .attr('class', 'graph-node-label-role')
-        .text(d => truncName(d.role, 22))
+        .text(d => truncName(d.role, 16))
         .attr('text-anchor', 'middle')
         .attr('dy', d => nodeRadius(d) + 26);
 
-    // Background sutil para tornar o canvas mais "vivo"
-    // (handled by .graph-host CSS)
-
-    // === SIMULAÇÃO ===
-    // Forças mais fortes pra centralizar e separar
+    // === SIMULAÇÃO com forças por COMPONENTE ===
     const linkDistance = d => {
-        if (d.layer === 'co_mention') return 130;
-        if (d.layer === 'family') return 110;
-        if (d.layer === 'roles') return 100;
-        return 105;
+        if (d.layer === 'co_mention') return 100;
+        if (d.layer === 'family') return 75;
+        if (d.layer === 'roles') return 80;
+        return 85;
     };
-
-    // --- Cluster por camada ---
-    // Calcula centroides em círculo ao redor do centro do canvas, um por camada
-    // que tem pelo menos 1 nó realmente presente no grafo atual.
-    const layersWithNodes = new Set();
-    nodes.forEach(n => {
-        ((n.layers && n.layers.length) ? n.layers : ['co_mention']).forEach(l => layersWithNodes.add(l));
-    });
-    const orderedLayers = LAYER_DEFS.map(l => l.id).filter(id => layersWithNodes.has(id));
-    const cx = width / 2, cy = height / 2;
-    const clusterRadius = Math.min(width, height) * 0.26;
-    const layerCentroids = {};
-    orderedLayers.forEach((layer, i) => {
-        if (orderedLayers.length === 1) {
-            layerCentroids[layer] = { x: cx, y: cy };
-        } else {
-            // Distribui em círculo, começando no topo
-            const angle = (i / orderedLayers.length) * 2 * Math.PI - Math.PI / 2;
-            layerCentroids[layer] = {
-                x: cx + Math.cos(angle) * clusterRadius,
-                y: cy + Math.sin(angle) * clusterRadius,
-            };
-        }
-    });
-    const primaryLayerOf = d => {
-        if (!d.layers || !d.layers.length) return 'co_mention';
-        // Prefere a primeira camada que tem centroide definido
-        return d.layers.find(l => layerCentroids[l]) || d.layers[0];
-    };
-    const targetX = d => (layerCentroids[primaryLayerOf(d)]?.x || cx);
-    const targetY = d => (layerCentroids[primaryLayerOf(d)]?.y || cy);
 
     const sim = d3.forceSimulation(nodes)
-        .force('link', d3.forceLink(edges).id(d => d.id).distance(linkDistance).strength(0.45))
-        .force('charge', d3.forceManyBody().strength(-620).distanceMax(420))
-        .force('center', d3.forceCenter(cx, cy).strength(0.04))
-        .force('collision', d3.forceCollide().radius(d => nodeRadius(d) + 48).strength(0.95))
-        // Cluster: puxa cada nó pro centroide da sua camada
-        .force('cluster-x', d3.forceX(targetX).strength(0.14))
-        .force('cluster-y', d3.forceY(targetY).strength(0.16))
+        .force('link', d3.forceLink(edges).id(d => d.id).distance(linkDistance).strength(0.55))
+        // Repulsão forte mas com decay rápido (não atrai longe)
+        .force('charge', d3.forceManyBody().strength(-720).distanceMax(380))
+        // Collision generosa pra labels não se sobreporem
+        .force('collision', d3.forceCollide().radius(d => nodeRadius(d) + 65).strength(0.98))
+        // Cada nó é puxado pro centroide do SEU componente, não do canvas inteiro
+        .force('cluster-x', d3.forceX(d => d._cx).strength(0.18))
+        .force('cluster-y', d3.forceY(d => d._cy).strength(0.20))
         .alpha(1)
-        .alphaDecay(0.025)
+        .alphaDecay(0.022)
         .on('tick', () => {
-            // Margens internas — só clamp se realmente passou
-            const padX = 80, padY = 60;
+            // Margens generosas — usa toda a tela
+            const padX = 90, padY = 70;
             nodes.forEach(d => {
                 if (d.x < padX) d.x = padX;
                 if (d.x > width - padX) d.x = width - padX;
@@ -2570,19 +2612,39 @@ function renderInteractiveGraphD3(data) {
                 if (d.y > height - padY) d.y = height - padY;
             });
 
-            // Edges curvas (quadratic Bezier)
+            // Edges curvas mais acentuadas (raio menor = curva mais visível)
             link.attr('d', d => {
                 const dx = d.target.x - d.source.x;
                 const dy = d.target.y - d.source.y;
-                const dr = Math.sqrt(dx * dx + dy * dy) * 1.8;
+                const dr = Math.sqrt(dx * dx + dy * dy) * 1.4; // mais curvas
                 return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
             });
 
             node.attr('transform', d => `translate(${d.x},${d.y})`);
+
+            // Atualiza os hulls (background dos componentes)
+            hullCircles
+                .attr('cx', comp => {
+                    const xs = comp.map(n => n.x || 0);
+                    return xs.reduce((a, b) => a + b, 0) / xs.length;
+                })
+                .attr('cy', comp => {
+                    const ys = comp.map(n => n.y || 0);
+                    return ys.reduce((a, b) => a + b, 0) / ys.length;
+                })
+                .attr('r', comp => {
+                    const xs = comp.map(n => n.x || 0);
+                    const ys = comp.map(n => n.y || 0);
+                    const cxComp = xs.reduce((a, b) => a + b, 0) / xs.length;
+                    const cyComp = ys.reduce((a, b) => a + b, 0) / ys.length;
+                    const maxDist = Math.max(...comp.map(n =>
+                        Math.sqrt((n.x - cxComp) ** 2 + (n.y - cyComp) ** 2)
+                    ));
+                    return maxDist + 45;
+                });
         });
 
-    // Para na hora certa pra economizar CPU
-    setTimeout(() => sim.alphaTarget(0).stop(), 4500);
+    setTimeout(() => sim.alphaTarget(0).stop(), 5000);
 
     _graphState.sim = sim;
 }
@@ -2846,78 +2908,166 @@ function renderConstellationD3(host, data, width, height) {
 }
 
 function renderGraphPanelEmpty() {
-    // Sugere abrir um nó ou aresta a partir dos top do grafo carregado
     const data = _graphState.data;
-    let suggestionsHtml = '';
-    if (data && data.nodes && data.nodes.length) {
-        // Top 4 nós com mais conexões
-        const degree = {};
-        (data.edges || []).forEach(e => {
-            const sid = typeof e.source === 'string' ? e.source : e.source?.id;
-            const tid = typeof e.target === 'string' ? e.target : e.target?.id;
-            degree[sid] = (degree[sid] || 0) + 1;
-            degree[tid] = (degree[tid] || 0) + 1;
-        });
-        const topNodes = [...data.nodes]
-            .filter(n => n.entity_id)
-            .sort((a, b) => (degree[b.id] || 0) - (degree[a.id] || 0))
-            .slice(0, 4);
-
-        // Top arestas biográficas (não co_mention)
-        const topBioEdges = (data.edges || [])
-            .filter(e => e.layer !== 'co_mention')
-            .slice(0, 3);
-
-        if (topNodes.length || topBioEdges.length) {
-            suggestionsHtml = `
-                ${topNodes.length ? `
-                    <div class="mt-6">
-                        <p class="text-[10px] uppercase tracking-[0.18em] text-stone-400 font-semibold mb-3">Pessoas em destaque</p>
-                        <div class="space-y-2">
-                            ${topNodes.map(n => `
-                                <button class="panel-suggest" onclick="showEntityPanel(${n.entity_id}, {label:'${escapeHtml(n.label).replace(/'/g, "\\'")}'})">
-                                    <strong>${escapeHtml(n.label)}</strong>
-                                    <small>${(degree[n.id] || 0)} conexões${n.role ? ' · ' + escapeHtml(n.role) : ''}</small>
-                                </button>
-                            `).join('')}
-                        </div>
-                    </div>
-                ` : ''}
-                ${topBioEdges.length ? `
-                    <div class="mt-6">
-                        <p class="text-[10px] uppercase tracking-[0.18em] text-stone-400 font-semibold mb-3">Relações pra investigar</p>
-                        <div class="space-y-2">
-                            ${topBioEdges.map(e => {
-                                const srcNode = data.nodes.find(n => n.id === (typeof e.source === 'string' ? e.source : e.source?.id));
-                                const tgtNode = data.nodes.find(n => n.id === (typeof e.target === 'string' ? e.target : e.target?.id));
-                                if (!srcNode || !tgtNode) return '';
-                                const layerColor = LAYER_COLOR_BY_ID[e.layer] || '#78716c';
-                                return `
-                                    <button class="panel-suggest" onclick="showEdgePanel(${srcNode.entity_id}, ${tgtNode.entity_id}, {layer:'${e.layer}', label:'${escapeHtml(e.label || '').replace(/'/g, "\\'")}'})">
-                                        <strong>${escapeHtml(srcNode.label)}</strong>
-                                        <small style="color:${layerColor};">${escapeHtml(e.label || e.predicate)} → <span style="color:#44403c;">${escapeHtml(tgtNode.label)}</span></small>
-                                    </button>
-                                `;
-                            }).join('')}
-                        </div>
-                    </div>
-                ` : ''}
-            `;
-        }
+    if (!data || !data.nodes || !data.nodes.length) {
+        return `
+            <div class="graph-panel-empty">
+                <p class="text-sm text-stone-500">Carregando estatísticas do grafo...</p>
+            </div>
+        `;
     }
+
+    // === Calcula stats reais do grafo carregado ===
+    const nodes = data.nodes;
+    const edges = data.edges || [];
+
+    // 1. Grau de cada nó
+    const degree = {};
+    edges.forEach(e => {
+        const sid = typeof e.source === 'string' ? e.source : e.source?.id;
+        const tid = typeof e.target === 'string' ? e.target : e.target?.id;
+        degree[sid] = (degree[sid] || 0) + 1;
+        degree[tid] = (degree[tid] || 0) + 1;
+    });
+
+    // 2. Componentes conectados (mesma lógica do D3)
+    const parent = {};
+    nodes.forEach(n => { parent[n.id] = n.id; });
+    const find = (x) => {
+        while (parent[x] !== x) {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        return x;
+    };
+    edges.forEach(e => {
+        const sid = typeof e.source === 'string' ? e.source : e.source?.id;
+        const tid = typeof e.target === 'string' ? e.target : e.target?.id;
+        const ra = find(sid), rb = find(tid);
+        if (ra !== rb) parent[ra] = rb;
+    });
+    const componentMap = {};
+    nodes.forEach(n => {
+        const root = find(n.id);
+        if (!componentMap[root]) componentMap[root] = [];
+        componentMap[root].push(n);
+    });
+    const components = Object.values(componentMap).sort((a, b) => b.length - a.length);
+    const linkedComponents = components.filter(c => c.length >= 2);
+
+    // 3. Período temporal coberto
+    const years = nodes.map(n => n.first_year).filter(Boolean);
+    const yearMin = years.length ? Math.min(...years) : null;
+    const yearMax = years.length ? Math.max(...years) : null;
+
+    // 4. Edges por camada
+    const layerCounts = {};
+    edges.forEach(e => {
+        layerCounts[e.layer] = (layerCounts[e.layer] || 0) + 1;
+    });
+
+    // 5. Top 3 pessoas (maior grau)
+    const topPeople = [...nodes]
+        .filter(n => n.entity_id && degree[n.id] >= 1)
+        .sort((a, b) => (degree[b.id] || 0) - (degree[a.id] || 0))
+        .slice(0, 3);
+
+    // 6. Top 2 famílias (componentes maiores)
+    const topFamilies = linkedComponents.slice(0, 2).map(comp => {
+        // Pessoa de maior grau no componente é o "chefe"
+        const leader = [...comp].sort((a, b) => (degree[b.id] || 0) - (degree[a.id] || 0))[0];
+        return { leader, size: comp.length };
+    });
+
+    // 7. Quantidade de pessoas isoladas
+    const isolated = components.filter(c => c.length === 1).length;
 
     return `
         <div class="graph-panel-empty">
-            <div class="flex items-start gap-3 mb-2">
+            <!-- Header compacto -->
+            <div class="flex items-start gap-3 mb-4">
                 <div class="shrink-0 w-9 h-9 rounded-full bg-amber-100 flex items-center justify-center mt-0.5">
-                    <svg class="w-4 h-4 text-amber-700" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0zm6 0c0 1.657-4.03 3-9 3s-9-1.343-9-3 4.03-3 9-3 9 1.343 9 3z"/></svg>
+                    <svg class="w-4 h-4 text-amber-700" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 </div>
                 <div>
-                    <p class="font-serif text-lg text-stone-800 leading-tight">Como investigar</p>
-                    <p class="text-xs text-stone-500 mt-1 leading-relaxed">Clique num <strong>nó</strong> para abrir a ficha de uma pessoa. Clique numa <strong>linha</strong> para ver a página real do jornal onde os dois aparecem citados.</p>
+                    <p class="font-serif text-lg text-stone-800 leading-tight">Anatomia da rede</p>
+                    <p class="text-xs text-stone-500 mt-0.5 leading-relaxed">Clique num nó ou linha pra explorar.</p>
                 </div>
             </div>
-            ${suggestionsHtml}
+
+            <!-- Big stats grid -->
+            <div class="grid grid-cols-2 gap-2 mb-4">
+                <div class="rounded-xl bg-white border border-stone-200 px-3 py-2.5">
+                    <div class="font-serif text-2xl text-amber-800 leading-none">${nodes.length}</div>
+                    <div class="text-[10px] text-stone-500 uppercase tracking-wider mt-1">pessoas</div>
+                </div>
+                <div class="rounded-xl bg-white border border-stone-200 px-3 py-2.5">
+                    <div class="font-serif text-2xl text-rose-800 leading-none">${edges.length}</div>
+                    <div class="text-[10px] text-stone-500 uppercase tracking-wider mt-1">vínculos</div>
+                </div>
+                <div class="rounded-xl bg-white border border-stone-200 px-3 py-2.5">
+                    <div class="font-serif text-2xl text-violet-800 leading-none">${linkedComponents.length}</div>
+                    <div class="text-[10px] text-stone-500 uppercase tracking-wider mt-1">famílias detectadas</div>
+                </div>
+                <div class="rounded-xl bg-white border border-stone-200 px-3 py-2.5">
+                    <div class="font-serif text-2xl text-emerald-800 leading-none">${yearMin && yearMax ? (yearMax - yearMin + 1) : '—'}</div>
+                    <div class="text-[10px] text-stone-500 uppercase tracking-wider mt-1">anos cobertos${yearMin ? ` · ${yearMin}-${yearMax}` : ''}</div>
+                </div>
+            </div>
+
+            ${Object.keys(layerCounts).length > 0 ? `
+                <div class="panel-section">
+                    <p class="text-[10px] uppercase tracking-[0.16em] text-stone-400 font-semibold mb-2">Vínculos por tipo</p>
+                    <div class="space-y-1.5">
+                        ${Object.entries(layerCounts).sort((a,b) => b[1]-a[1]).map(([layer, count]) => {
+                            const meta = LAYER_DEFS.find(l => l.id === layer);
+                            const pct = (count / edges.length * 100).toFixed(0);
+                            return `
+                                <div class="flex items-center gap-2 text-xs">
+                                    <span class="inline-block w-2.5 h-2.5 rounded-full" style="background:${meta?.color || '#a8a29e'}"></span>
+                                    <span class="text-stone-700 flex-1">${meta?.label || layer}</span>
+                                    <span class="text-stone-500 font-mono">${count}</span>
+                                    <span class="text-stone-400 text-[10px]">${pct}%</span>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            ` : ''}
+
+            ${topFamilies.length ? `
+                <div class="panel-section">
+                    <p class="text-[10px] uppercase tracking-[0.16em] text-stone-400 font-semibold mb-2">Maiores agrupamentos</p>
+                    <div class="space-y-2">
+                        ${topFamilies.map(({leader, size}) => `
+                            <button class="panel-suggest" onclick="focusGraphOnEntity(${leader.entity_id}, '${escapeHtml(leader.label).replace(/'/g, "\\'")}')">
+                                <strong>${escapeHtml(leader.label)}</strong>
+                                <small>${size} pessoas conectadas · clique pra centrar grafo</small>
+                            </button>
+                        `).join('')}
+                    </div>
+                </div>
+            ` : ''}
+
+            ${topPeople.length ? `
+                <div class="panel-section">
+                    <p class="text-[10px] uppercase tracking-[0.16em] text-stone-400 font-semibold mb-2">Mais conectadas</p>
+                    <div class="space-y-2">
+                        ${topPeople.map(n => `
+                            <button class="panel-suggest" onclick="showEntityPanel(${n.entity_id}, {label:'${escapeHtml(n.label).replace(/'/g, "\\'")}'})">
+                                <strong>${escapeHtml(n.label)}</strong>
+                                <small>${degree[n.id] || 0} conexões${n.role ? ' · ' + escapeHtml(n.role) : ''}</small>
+                            </button>
+                        `).join('')}
+                    </div>
+                </div>
+            ` : ''}
+
+            ${isolated > 5 ? `
+                <div class="panel-section">
+                    <p class="text-[10px] text-stone-400 italic">${isolated} pessoas sem conexão visível neste recorte. Toggle outras camadas pra ver vínculos diferentes.</p>
+                </div>
+            ` : ''}
         </div>
     `;
 }
