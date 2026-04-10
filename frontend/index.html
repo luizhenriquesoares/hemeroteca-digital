@@ -1822,19 +1822,21 @@ async function loadSurnameCloud() {
 }
 
 async function loadGenealogiaNetwork() {
-    // Reusa o grafo interativo, focado em família por padrão
+    // Reusa o grafo interativo, focado em família + ponte atlântica
     return loadInteractiveGraph('genealogia-network-container', {
-        defaultLayers: ['family', 'roles'],
-        eyebrow: 'Rede Familiar',
+        defaultLayers: ['family', 'atlantic_bridge'],
+        eyebrow: 'Genealogia transatlântica',
         eyebrowColor: 'text-violet-800',
-        title: 'A genealogia atravessada nos jornais',
-        subtitle: 'Comece pela camada Família e clique em qualquer pai-filho para ver a página exata do batismo, ata militar ou registro de óbito.',
+        title: 'Da paróquia açoriana ao jornal pernambucano',
+        subtitle: 'Linhas verde-azuladas conectam pessoas dos jornais de PE a registros paroquiais dos Açores. Linhas vermelhas mostram famílias citadas nos jornais. Use a Constelação para ver os séculos lado a lado.',
+        showFactStrip: false,
     });
 }
 
 // === Grafo interativo com camadas + painel lateral ===
 const _graphState = {
     activeLayers: new Set(['family', 'roles', 'co_mention']),
+    viewMode: 'network',   // 'network' (force-directed) ou 'constellation' (anéis temporais)
     data: null,
     sim: null,
     selection: null,
@@ -1851,13 +1853,14 @@ const _graphState = {
 };
 
 const LAYER_DEFS = [
-    { id: 'family',    label: 'Família',    color: '#dc2626' },
-    { id: 'roles',     label: 'Cargos',     color: '#2563eb' },
-    { id: 'justice',   label: 'Justiça',    color: '#7c3aed' },
-    { id: 'slavery',   label: 'Escravidão', color: '#b45309' },
-    { id: 'residence', label: 'Residência', color: '#0891b2' },
-    { id: 'events',    label: 'Eventos',    color: '#059669' },
-    { id: 'co_mention',label: 'Co-menção',  color: '#a8a29e' },
+    { id: 'family',          label: 'Família',         color: '#dc2626' },
+    { id: 'roles',           label: 'Cargos',          color: '#2563eb' },
+    { id: 'justice',         label: 'Justiça',         color: '#7c3aed' },
+    { id: 'slavery',         label: 'Escravidão',      color: '#b45309' },
+    { id: 'residence',       label: 'Residência',      color: '#0891b2' },
+    { id: 'events',          label: 'Eventos',         color: '#059669' },
+    { id: 'co_mention',      label: 'Co-menção',       color: '#a8a29e' },
+    { id: 'atlantic_bridge', label: 'Ponte Atlântica', color: '#0d9488' },
 ];
 
 const LAYER_COLOR_BY_ID = Object.fromEntries(LAYER_DEFS.map(l => [l.id, l.color]));
@@ -1911,7 +1914,23 @@ async function loadInteractiveGraph(hostId = 'interactive-graph-container', opti
                     </div>
                 ` : ''}
                 <div id="${prefix}-breadcrumb" class="hidden mb-3"></div>
-                <div id="${_graphState.ids.toggles}" class="flex flex-wrap gap-2"></div>
+                <div class="flex items-start justify-between gap-3 flex-wrap">
+                    <div id="${_graphState.ids.toggles}" class="flex flex-wrap gap-2"></div>
+                    <div class="inline-flex items-center rounded-full border border-stone-200 bg-white p-1 text-xs font-medium" role="tablist" aria-label="Modo de visualização">
+                        <button type="button" id="${prefix}-mode-network"
+                            onclick="setGraphViewMode('network')"
+                            class="px-3 py-1.5 rounded-full transition inline-flex items-center gap-1.5">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path stroke-linecap="round" d="M7 6.5l3 4M17 6.5l-3 4M7 17.5l3-4M17 17.5l-3-4"/></svg>
+                            Rede
+                        </button>
+                        <button type="button" id="${prefix}-mode-constellation"
+                            onclick="setGraphViewMode('constellation')"
+                            class="px-3 py-1.5 rounded-full transition inline-flex items-center gap-1.5">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>
+                            Constelação
+                        </button>
+                    </div>
+                </div>
             </div>
             <div class="grid lg:grid-cols-[1.7fr_1fr]">
                 <div class="relative" style="min-height:560px;">
@@ -1944,6 +1963,7 @@ async function loadInteractiveGraph(hostId = 'interactive-graph-container', opti
     _graphState.ids.legendRows = `${prefix}-legend-rows`;
     _graphState.ids.breadcrumb = `${prefix}-breadcrumb`;
     renderLayerToggles();
+    renderGraphViewModeButtons();
     // Carrega fact strip + grafo em paralelo
     if (showFactStrip) loadGraphFactStrip();
     await refreshInteractiveGraph();
@@ -2072,6 +2092,34 @@ function focusGraphOnEntity(entityId, entityName) {
     refreshInteractiveGraph();
 }
 
+function setGraphViewMode(mode) {
+    if (mode !== 'network' && mode !== 'constellation') return;
+    if (_graphState.viewMode === mode) return;
+    _graphState.viewMode = mode;
+    renderGraphViewModeButtons();
+    // Re-render apenas (sem refetch — os dados são os mesmos)
+    if (_graphState.data) {
+        renderInteractiveGraphD3(_graphState.data);
+        renderGraphLegend(_graphState.data);
+    }
+}
+
+function renderGraphViewModeButtons() {
+    const prefix = _graphState.ids.svg.replace(/-svg-host$/, '');
+    const network = document.getElementById(`${prefix}-mode-network`);
+    const constellation = document.getElementById(`${prefix}-mode-constellation`);
+    if (!network || !constellation) return;
+    const activeClass = 'bg-amber-700 text-white shadow-sm';
+    const inactiveClass = 'text-stone-500 hover:text-stone-800';
+    if (_graphState.viewMode === 'constellation') {
+        constellation.className = `px-3 py-1.5 rounded-full transition inline-flex items-center gap-1.5 ${activeClass}`;
+        network.className = `px-3 py-1.5 rounded-full transition inline-flex items-center gap-1.5 ${inactiveClass}`;
+    } else {
+        network.className = `px-3 py-1.5 rounded-full transition inline-flex items-center gap-1.5 ${activeClass}`;
+        constellation.className = `px-3 py-1.5 rounded-full transition inline-flex items-center gap-1.5 ${inactiveClass}`;
+    }
+}
+
 function clearGraphFocus() {
     if (!_graphState.focusEntityId) return;
     _graphState.focusEntityId = null;
@@ -2166,6 +2214,12 @@ function renderInteractiveGraphD3(data) {
         return;
     }
 
+    // Despacha para o renderer de constelação se o modo for esse
+    if (_graphState.viewMode === 'constellation') {
+        renderConstellationD3(host, data, width, height);
+        return;
+    }
+
     const svg = d3.select(host).append('svg')
         .attr('width', width).attr('height', height)
         .attr('viewBox', `0 0 ${width} ${height}`)
@@ -2234,8 +2288,16 @@ function renderInteractiveGraphD3(data) {
         })
         .on('click', (event, d) => {
             event.stopPropagation();
-            const sourceId = (d.source.entity_id ?? String(d.source.id || '').replace('entity_', '')) || null;
-            const targetId = (d.target.entity_id ?? String(d.target.id || '').replace('entity_', '')) || null;
+            // Para arestas atlantic_bridge, uma das pontas é parish_record (sem entity_id)
+            // — abre o painel do parish em vez do edge-evidence (que precisa de 2 entidades).
+            const srcParish = d.source.type === 'parish_record' ? d.source : null;
+            const tgtParish = d.target.type === 'parish_record' ? d.target : null;
+            if (srcParish || tgtParish) {
+                showParishPanel(srcParish || tgtParish);
+                return;
+            }
+            const sourceId = d.source.entity_id || null;
+            const targetId = d.target.entity_id || null;
             if (sourceId && targetId) {
                 showEdgePanel(Number(sourceId), Number(targetId), d);
             }
@@ -2255,7 +2317,11 @@ function renderInteractiveGraphD3(data) {
         .style('cursor', 'pointer')
         .on('click', (event, d) => {
             event.stopPropagation();
-            if (d.entity_id) showEntityPanel(d.entity_id, d);
+            if (d.entity_id) {
+                showEntityPanel(d.entity_id, d);
+            } else if (d.type === 'parish_record' && d.parish_record_id) {
+                showParishPanel(d);
+            }
         })
         .on('mouseenter', function(event, d) {
             const role = d.role ? `<br><em>${escapeHtml(d.role)}</em>` : '';
@@ -2403,6 +2469,264 @@ function renderInteractiveGraphD3(data) {
     setTimeout(() => sim.alphaTarget(0).stop(), 4500);
 
     _graphState.sim = sim;
+}
+
+// === Renderer alternativo: Constelação Temporal (anéis por década) ===
+function renderConstellationD3(host, data, width, height) {
+    // Coletar nós com year (usa first_year, fallback last_year)
+    const nodesWithYear = data.nodes
+        .map(n => ({
+            ...n,
+            year: n.first_year || n.last_year || null,
+        }))
+        .filter(n => n.year);
+
+    if (nodesWithYear.length < 2) {
+        host.innerHTML = `
+            <div class="p-8 text-center">
+                <p class="text-sm text-stone-500 font-medium">Constelação indisponível</p>
+                <p class="text-xs text-stone-400 mt-2 max-w-sm mx-auto">As entidades dessas camadas ainda não têm período temporal extraído. Volte para "Rede".</p>
+            </div>
+        `;
+        return;
+    }
+
+    const years = nodesWithYear.map(n => n.year);
+    const minYear = Math.min(...years);
+    const maxYear = Math.max(...years);
+
+    // Agrupa por década (ou ano se a faixa for pequena)
+    const span = maxYear - minYear;
+    const bucketSize = span >= 30 ? 10 : (span >= 10 ? 5 : 1);
+    const bucketOf = y => Math.floor(y / bucketSize) * bucketSize;
+    const minBucket = bucketOf(minYear);
+    const maxBucket = bucketOf(maxYear);
+    const buckets = [];
+    for (let b = minBucket; b <= maxBucket; b += bucketSize) buckets.push(b);
+
+    // Posições em anéis concêntricos
+    const cx = width / 2, cy = height / 2;
+    const innerR = 70;
+    const outerR = Math.min(width, height) / 2 - 60;
+    const ringStep = buckets.length > 1 ? (outerR - innerR) / (buckets.length - 1) : 0;
+    const ringRadius = bucket => innerR + (buckets.indexOf(bucket)) * ringStep;
+
+    // Distribui os nós em ângulos dentro de cada anel (golden angle pra evitar colisão)
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+    const nodesByBucket = {};
+    nodesWithYear.forEach(n => {
+        const b = bucketOf(n.year);
+        if (!nodesByBucket[b]) nodesByBucket[b] = [];
+        nodesByBucket[b].push(n);
+    });
+
+    const positionedNodes = [];
+    const nodeById = {};
+    Object.entries(nodesByBucket).forEach(([bucketStr, bucketNodes]) => {
+        const bucket = Number(bucketStr);
+        const r = ringRadius(bucket);
+        const count = bucketNodes.length;
+        bucketNodes.forEach((n, i) => {
+            // Distribuir em arco com offset por bucket
+            const angleOffset = bucket * 0.13; // varia ângulo inicial por anel pra não alinhar
+            const angle = angleOffset + (i / Math.max(count, 1)) * 2 * Math.PI - Math.PI / 2;
+            const x = cx + Math.cos(angle) * r;
+            const y = cy + Math.sin(angle) * r;
+            const positioned = { ...n, x, y, bucket };
+            positionedNodes.push(positioned);
+            nodeById[n.id] = positioned;
+        });
+    });
+
+    // SVG
+    const svg = d3.select(host).append('svg')
+        .attr('width', width).attr('height', height)
+        .attr('viewBox', `0 0 ${width} ${height}`)
+        .style('cursor', 'grab');
+
+    const root = svg.append('g');
+    const zoomBehavior = d3.zoom().scaleExtent([0.5, 4]).on('zoom', (event) => {
+        root.attr('transform', event.transform);
+    });
+    svg.call(zoomBehavior);
+    _graphState.svgSel = svg;
+    _graphState.zoom = zoomBehavior;
+
+    const tooltip = d3.select(host).append('div').attr('class', 'graph-tooltip').style('display', 'none');
+
+    // Markers para arestas direcionadas
+    const defs = svg.append('defs');
+    LAYER_DEFS.forEach(layer => {
+        defs.append('marker')
+            .attr('id', `arrow-c-${layer.id}`)
+            .attr('viewBox', '0 -5 10 10')
+            .attr('refX', 16).attr('refY', 0)
+            .attr('markerWidth', 5).attr('markerHeight', 5)
+            .attr('orient', 'auto')
+            .append('path')
+            .attr('d', 'M0,-4L8,0L0,4')
+            .attr('fill', layer.color)
+            .attr('opacity', 0.85);
+    });
+
+    // === Anéis temporais (background) ===
+    const ringsLayer = root.append('g').attr('class', 'rings');
+    buckets.forEach(b => {
+        const r = ringRadius(b);
+        ringsLayer.append('circle')
+            .attr('cx', cx).attr('cy', cy).attr('r', r)
+            .attr('fill', 'none')
+            .attr('stroke', '#e7e5e4')
+            .attr('stroke-width', 1)
+            .attr('stroke-dasharray', '2,4');
+        // Label do ano (no topo do anel)
+        ringsLayer.append('text')
+            .attr('x', cx).attr('y', cy - r - 5)
+            .attr('text-anchor', 'middle')
+            .style('font-size', '10px')
+            .style('font-weight', '600')
+            .style('font-family', 'Inter, sans-serif')
+            .style('fill', '#a8a29e')
+            .style('paint-order', 'stroke')
+            .style('stroke', '#fffdf8')
+            .style('stroke-width', '3px')
+            .text(bucketSize === 1 ? b : `${b}s`);
+    });
+
+    // === Edges (curvas atravessando anéis) ===
+    const edges = (data.edges || [])
+        .filter(e => {
+            const sid = typeof e.source === 'string' ? e.source : e.source.id;
+            const tid = typeof e.target === 'string' ? e.target : e.target.id;
+            return nodeById[sid] && nodeById[tid];
+        })
+        .map(e => ({
+            ...e,
+            source: nodeById[typeof e.source === 'string' ? e.source : e.source.id],
+            target: nodeById[typeof e.target === 'string' ? e.target : e.target.id],
+        }));
+
+    const maxWeight = Math.max(...edges.map(e => e.weight || 1), 1);
+
+    const link = root.append('g').attr('class', 'edges').selectAll('path')
+        .data(edges).join('path')
+        .attr('class', 'graph-link')
+        .attr('fill', 'none')
+        .attr('stroke', d => LAYER_COLOR_BY_ID[d.layer] || '#d6d3d1')
+        .attr('stroke-width', d => d.layer === 'co_mention' ? 1.2 + (d.weight / maxWeight) * 2.8 : 2.2)
+        .attr('stroke-opacity', d => d.layer === 'co_mention' ? 0.22 + (d.weight / maxWeight) * 0.4 : 0.78)
+        .attr('stroke-linecap', 'round')
+        .attr('marker-end', d => d.layer !== 'co_mention' ? `url(#arrow-c-${d.layer})` : null)
+        .style('cursor', 'pointer')
+        .attr('d', d => {
+            // Curva via ponto de controle no centro do canvas (faz arestas "passarem" pelo centro)
+            const dx = d.target.x - d.source.x;
+            const dy = d.target.y - d.source.y;
+            const dr = Math.sqrt(dx * dx + dy * dy) * 1.6;
+            return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
+        })
+        .on('mouseenter', function(event, d) {
+            d3.select(this).classed('graph-edge-hover', true);
+            const layerLabel = LAYER_DEFS.find(l => l.id === d.layer)?.label || d.layer;
+            tooltip.html(`<strong>${escapeHtml(d.label || d.predicate)}</strong><br><em>${escapeHtml(layerLabel)}</em><br><span style="font-size:10px;color:#a8a29e;">${d.source.year} → ${d.target.year}</span>`)
+                .style('display', 'block')
+                .style('left', (event.offsetX + 14) + 'px').style('top', (event.offsetY + 8) + 'px');
+        })
+        .on('mouseleave', function() {
+            d3.select(this).classed('graph-edge-hover', false);
+            tooltip.style('display', 'none');
+        })
+        .on('click', (event, d) => {
+            event.stopPropagation();
+            const srcParish = d.source.type === 'parish_record' ? d.source : null;
+            const tgtParish = d.target.type === 'parish_record' ? d.target : null;
+            if (srcParish || tgtParish) {
+                showParishPanel(srcParish || tgtParish);
+                return;
+            }
+            const sid = d.source.entity_id;
+            const tid = d.target.entity_id;
+            if (sid && tid) showEdgePanel(sid, tid, d);
+        });
+
+    // === Nós ===
+    const maxMentions = Math.max(...positionedNodes.map(n => n.mentions || 1), 1);
+    const nodeRadius = d => {
+        const base = d.central ? 11 : 7;
+        const bonus = Math.sqrt((d.mentions || 1) / maxMentions) * 6;
+        return base + bonus;
+    };
+    const nodePrimaryColor = d => {
+        const firstLayer = (d.layers && d.layers[0]) || 'co_mention';
+        return LAYER_COLOR_BY_ID[firstLayer] || '#78350f';
+    };
+
+    const node = root.append('g').attr('class', 'nodes').selectAll('g')
+        .data(positionedNodes).join('g')
+        .attr('class', 'graph-node')
+        .attr('transform', d => `translate(${d.x},${d.y})`)
+        .style('cursor', 'pointer')
+        .on('click', (event, d) => {
+            event.stopPropagation();
+            if (d.entity_id) {
+                showEntityPanel(d.entity_id, d);
+            } else if (d.type === 'parish_record' && d.parish_record_id) {
+                showParishPanel(d);
+            }
+        })
+        .on('mouseenter', function(event, d) {
+            const role = d.role ? `<br><em>${escapeHtml(d.role)}</em>` : '';
+            tooltip.html(`<strong>${escapeHtml(d.label)}</strong>${role}<br>${d.year} · ${d.mentions || 0} menções`)
+                .style('display', 'block')
+                .style('left', (event.offsetX + 14) + 'px').style('top', (event.offsetY - 10) + 'px');
+            // Highlight conexões
+            const connectedIds = new Set([d.id]);
+            link.each(function(l) {
+                if (l.source.id === d.id) connectedIds.add(l.target.id);
+                if (l.target.id === d.id) connectedIds.add(l.source.id);
+            });
+            node.classed('graph-node-faded', n => !connectedIds.has(n.id));
+            link.classed('graph-edge-faded', l => l.source.id !== d.id && l.target.id !== d.id);
+        })
+        .on('mouseleave', () => {
+            tooltip.style('display', 'none');
+            node.classed('graph-node-faded', false);
+            link.classed('graph-edge-faded', false);
+        });
+
+    // Glow no central
+    node.filter(d => d.central).append('circle')
+        .attr('r', d => nodeRadius(d) + 8)
+        .attr('fill', '#fde68a')
+        .attr('fill-opacity', 0.55);
+
+    node.append('circle')
+        .attr('r', nodeRadius)
+        .attr('fill', d => d.central ? '#b45309' : nodePrimaryColor(d))
+        .attr('fill-opacity', 0.95)
+        .attr('stroke', '#fffdf8')
+        .attr('stroke-width', d => d.central ? 3 : 2);
+
+    // Truncamento amigável
+    const truncName = (s, max = 18) => {
+        if (!s) return '?';
+        if (s.length <= max) return s;
+        const cut = s.slice(0, max);
+        const lastSpace = cut.lastIndexOf(' ');
+        return (lastSpace > 8 ? cut.slice(0, lastSpace) : cut) + '…';
+    };
+
+    node.append('text')
+        .attr('class', 'graph-node-label')
+        .text(d => truncName(d.label, d.central ? 26 : 18))
+        .attr('text-anchor', 'middle')
+        .attr('dy', d => nodeRadius(d) + 13);
+
+    // Limpa simulação anterior se houver
+    if (_graphState.sim) {
+        try { _graphState.sim.stop(); } catch (e) {}
+    }
+    _graphState.sim = null;
 }
 
 function renderGraphPanelEmpty() {
@@ -2592,6 +2916,44 @@ function renderEntityPanel(entity, nodeData) {
             <button onclick="loadEntityById(${entity.id})" class="px-3 py-2 rounded-xl bg-stone-900 text-white text-xs font-medium hover:bg-stone-800">
                 Abrir dossiê
             </button>
+        </div>
+    `;
+}
+
+function showParishPanel(parishNode) {
+    const panel = document.getElementById(_graphState.ids.panel);
+    if (!panel) return;
+    panel.scrollTop = 0;
+    panel.innerHTML = `
+        <div class="flex items-start justify-between gap-3 mb-4">
+            <div>
+                <p class="text-[10px] uppercase tracking-[0.18em] font-semibold" style="color:#0d9488;">Registro paroquial</p>
+                <h3 class="font-serif text-2xl text-stone-900 mt-1 leading-tight">${escapeHtml(parishNode.label || '?')}</h3>
+                ${parishNode.role ? `<p class="text-sm text-teal-800 italic mt-1">${escapeHtml(parishNode.role)}</p>` : ''}
+            </div>
+            <button onclick="closeGraphPanel()" class="text-stone-400 hover:text-stone-700 text-xl leading-none">×</button>
+        </div>
+        <div class="panel-section">
+            <p class="text-[10px] uppercase tracking-[0.16em] text-stone-400 font-semibold mb-2">Origem</p>
+            <p class="text-sm text-stone-700 leading-relaxed">
+                Este nó representa um registro encontrado nos livros paroquiais dos Açores
+                (digitalizados pela Biblioteca Pública e Arquivo Regional de Ponta Delgada).
+                A linha verde-azulada indica que <strong>uma pessoa com nome compatível</strong>
+                aparece nos jornais de Pernambuco — provável migrante ou descendente.
+            </p>
+        </div>
+        <div class="panel-section">
+            <p class="text-[10px] uppercase tracking-[0.16em] text-stone-400 font-semibold mb-2">Como ler este vínculo</p>
+            <ul class="text-xs text-stone-600 space-y-1.5 leading-relaxed">
+                <li>O nome bate (com tolerância a variações grafemáticas)</li>
+                <li>O período é plausível: ${parishNode.first_year ? `nascido por volta de ${parishNode.first_year}` : 'data do registro'}</li>
+                <li>A confiança é estatística — ainda precisa de revisão historiográfica</li>
+            </ul>
+        </div>
+        <div class="panel-section">
+            <p class="text-xs text-stone-500 italic">
+                Quer ver a evidência completa? Clique na linha verde-azulada que conecta este registro à pessoa de Pernambuco — você verá o snippet do jornal com o nome em comum.
+            </p>
         </div>
     `;
 }

@@ -89,6 +89,16 @@ GRAPH_PREDICATES = {
 }
 WEAK_PREDICATES = {"mentioned_with"}
 
+_YEAR_RE = __import__("re").compile(r"(1[0-9]{3}|20[0-9]{2})")
+
+
+def _parse_year(value) -> int | None:
+    """Extrai um ano de strings tipo 'Ano 1825', '1825', 'Janeiro 1825', etc."""
+    if value is None:
+        return None
+    match = _YEAR_RE.search(str(value))
+    return int(match.group(1)) if match else None
+
 
 def _page_node_id(page_id: int) -> str:
     return f"page_{page_id}"
@@ -881,6 +891,9 @@ LAYER_PREDICATES = {
     "slavery": {"slave_of", "fugitive", "owner_of", "freed_by"},
     "residence": {"resident_of", "location_of"},
     "events": {"deceased", "signed_by", "authored", "beneficiary_of", "observed"},
+    # atlantic_bridge é uma camada "virtual" — não vem da tabela relations,
+    # mas do cross-reference com parish_records.db dos Açores
+    "atlantic_bridge": set(),
 }
 
 LAYER_LABELS = {
@@ -891,6 +904,7 @@ LAYER_LABELS = {
     "residence": "Residência",
     "events": "Eventos",
     "co_mention": "Co-menção",
+    "atlantic_bridge": "Ponte Atlântica",
 }
 
 LAYER_COLORS = {
@@ -901,6 +915,7 @@ LAYER_COLORS = {
     "residence": "#0891b2",
     "events": "#059669",
     "co_mention": "#a8a29e",
+    "atlantic_bridge": "#0d9488",
 }
 
 PREDICATE_LABELS = {
@@ -936,11 +951,58 @@ PREDICATE_LABELS = {
 }
 
 
-def _predicate_to_layer(predicate: str) -> str | None:
+def _predicate_to_layer(predicate: str):
     for layer, predicates in LAYER_PREDICATES.items():
         if predicate in predicates:
             return layer
     return None
+
+
+def _load_atlantic_bridges(min_confidence: float = 0.6, limit: int = 80):
+    """Carrega cross-references Açores↔PE com cache em memória.
+
+    Retorna lista de dicts: {pe_entity_id, pe_name, acores_name, parish, year, confidence, record_id}.
+    Como cross_reference_pe() é caro (~1s), faz cache de 5 minutos.
+    """
+    global _ATLANTIC_CACHE
+    try:
+        cached, ts = _ATLANTIC_CACHE
+        if (__import__("time").time() - ts) < 300:
+            return [m for m in cached if m["confidence"] >= min_confidence][:limit]
+    except (NameError, TypeError):
+        pass
+
+    try:
+        from src.acores.graph import cross_reference_pe
+        matches = cross_reference_pe()
+    except Exception as exc:
+        logger.warning("atlantic bridges indisponível: %s", exc)
+        return []
+
+    # Normaliza para o formato do grafo
+    bridges = []
+    seen = set()
+    for m in matches:
+        pe_id = m.get("pe_entity", {}).get("id")
+        if not pe_id or pe_id in seen:
+            continue
+        seen.add(pe_id)
+        bridges.append({
+            "pe_entity_id": int(pe_id),
+            "pe_name": m["pe_entity"]["name"],
+            "acores_name": m.get("acores_name", ""),
+            "parish": m.get("acores_parish", ""),
+            "year": m.get("acores_year"),
+            "confidence": float(m.get("confidence", 0)),
+            "record_id": int(m.get("acores_record_id", 0) or 0),
+            "field": m.get("acores_field", ""),
+        })
+
+    _ATLANTIC_CACHE = (bridges, __import__("time").time())
+    return [b for b in bridges if b["confidence"] >= min_confidence][:limit]
+
+
+_ATLANTIC_CACHE = (None, 0.0)
 
 
 def get_layered_graph(
@@ -986,6 +1048,9 @@ def get_layered_graph(
 
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
+    # Quando atlantic_bridge está ativa, garante que as bridges entram primeiro
+    # (têm grau baixo e seriam descartadas pelo top-N do final)
+    atlantic_first = "atlantic_bridge" in layer_set
 
     def _ensure_node(entity_id: int, name: str, etype: str = "person") -> str | None:
         if not _is_graph_legible(name) and etype == "person":
@@ -1003,6 +1068,50 @@ def get_layered_graph(
                 "layers": [],
             }
         return nid
+
+    # 0. Atlantic Bridges (rodam PRIMEIRO quando ativas, pra reservar espaço)
+    if atlantic_first:
+        bridges = _load_atlantic_bridges(min_confidence=0.7, limit=limit * 4)
+        seen_pe_ids = set()
+        bridge_target = max(8, limit // 3)  # ~1/3 do grafo é dedicado a bridges
+        for bridge in bridges:
+            if len([n for n in nodes.values() if n.get("type") == "parish_record"]) >= bridge_target:
+                break
+            pe_id = bridge["pe_entity_id"]
+            if pe_id in seen_pe_ids:
+                continue
+            seen_pe_ids.add(pe_id)
+
+            pe_nid = _ensure_node(pe_id, bridge["pe_name"])
+            if not pe_nid:
+                continue
+
+            parish_nid = f"parish_{bridge['record_id']}"
+            if parish_nid not in nodes:
+                year_label = f" · {bridge['year']}" if bridge.get("year") else ""
+                nodes[parish_nid] = {
+                    "id": parish_nid,
+                    "entity_id": None,
+                    "label": bridge["acores_name"],
+                    "type": "parish_record",
+                    "mentions": 0,
+                    "role": f"{bridge['parish']}{year_label}",
+                    "central": False,
+                    "layers": ["atlantic_bridge"],
+                    "first_year": bridge.get("year"),
+                    "parish_record_id": bridge["record_id"],
+                }
+            if "atlantic_bridge" not in nodes[pe_nid]["layers"]:
+                nodes[pe_nid]["layers"].append("atlantic_bridge")
+            edges.append({
+                "source": pe_nid,
+                "target": parish_nid,
+                "predicate": "atlantic_bridge",
+                "layer": "atlantic_bridge",
+                "label": f"vínculo paroquial · {bridge['parish']}",
+                "weight": 2,
+                "confidence": bridge["confidence"],
+            })
 
     # 1. Carrega relações biográficas das camadas selecionadas
     if selected_predicates:
@@ -1093,10 +1202,11 @@ def get_layered_graph(
                 "weight": int(pair["shared_pages"]),
             })
 
-    # 3. Enriquece nós com cargo e contagem de menções
+    # 3. Enriquece nós com cargo, contagem de menções e período temporal
+    # (apenas nós que são entidades reais de PE — parish_X não tem entity_id)
     if nodes:
-        entity_ids = [n["entity_id"] for n in nodes.values()]
-        id_list = ",".join(str(i) for i in entity_ids)
+        entity_ids = [n["entity_id"] for n in nodes.values() if n.get("entity_id")]
+        id_list = ",".join(str(i) for i in entity_ids) if entity_ids else "0"
         for row in conn.execute(f"""
             SELECT entity_id, COUNT(*) AS c FROM entity_mentions
             WHERE entity_id IN ({id_list}) GROUP BY entity_id
@@ -1115,15 +1225,42 @@ def get_layered_graph(
             if nid in nodes and not nodes[nid]["role"]:
                 nodes[nid]["role"] = row["role"] or ""
 
+        # Período temporal (parsing do "Ano 1825" → 1825)
+        for row in conn.execute(f"""
+            SELECT id, first_seen_year, last_seen_year FROM entities
+            WHERE id IN ({id_list})
+        """).fetchall():
+            nid = f"entity_{row['id']}"
+            if nid in nodes:
+                fy = _parse_year(row["first_seen_year"])
+                ly = _parse_year(row["last_seen_year"])
+                if fy:
+                    nodes[nid]["first_year"] = fy
+                if ly:
+                    nodes[nid]["last_year"] = ly
+
     conn.close()
 
     # 4. Limita ao top N por grau (mais conexões)
+    # Atlantic bridges (parish_X + entidade PE conectada) são preservadas mesmo
+    # com grau baixo, porque é a feature distinta da camada.
     if len(nodes) > limit:
+        protected = set()
+        if atlantic_first:
+            for e in edges:
+                if e.get("layer") == "atlantic_bridge":
+                    protected.add(e["source"])
+                    protected.add(e["target"])
+
         degree: dict[str, int] = {}
         for e in edges:
             degree[e["source"]] = degree.get(e["source"], 0) + 1
             degree[e["target"]] = degree.get(e["target"], 0) + 1
-        keep = set(sorted(degree, key=lambda nid: degree.get(nid, 0), reverse=True)[:limit])
+        # Top-N por grau, deixando espaço pros protegidos
+        non_protected = [nid for nid in degree if nid not in protected]
+        non_protected.sort(key=lambda nid: degree.get(nid, 0), reverse=True)
+        slots_left = max(0, limit - len(protected))
+        keep = set(non_protected[:slots_left]) | protected
         nodes = {k: v for k, v in nodes.items() if k in keep}
         edges = [e for e in edges if e["source"] in keep and e["target"] in keep]
 
@@ -1478,8 +1615,8 @@ def _build_ego_network(
 
     # Enriquece nós com cargo + contagem de menções
     if nodes:
-        entity_ids = [n["entity_id"] for n in nodes.values()]
-        id_list = ",".join(str(i) for i in entity_ids)
+        entity_ids = [n["entity_id"] for n in nodes.values() if n.get("entity_id")]
+        id_list = ",".join(str(i) for i in entity_ids) if entity_ids else "0"
         for row in conn.execute(f"""
             SELECT entity_id, COUNT(*) AS c FROM entity_mentions
             WHERE entity_id IN ({id_list}) GROUP BY entity_id
