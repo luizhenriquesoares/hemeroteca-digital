@@ -108,6 +108,45 @@
         }
         .graph-recenter-btn:hover { background: #fffdf8; border-color: #d6d3d1; transform: translateY(-1px); box-shadow: 0 3px 10px rgba(0,0,0,0.07); }
         .graph-recenter-btn svg { width: 12px; height: 12px; }
+        /* Botão expandir (ao lado do recentrar) */
+        .graph-expand-btn {
+            position: absolute; top: 14px; right: 130px; z-index: 20;
+            display: inline-flex; align-items: center; gap: 6px;
+            background: white; border: 1px solid #e7e5e4; border-radius: 10px;
+            padding: 7px 13px; font-size: 11px; font-weight: 500;
+            color: #44403c; cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            transition: all 0.15s;
+        }
+        .graph-expand-btn:hover { background: #fffdf8; border-color: #d6d3d1; transform: translateY(-1px); box-shadow: 0 3px 10px rgba(0,0,0,0.07); }
+        .graph-expand-btn svg { width: 12px; height: 12px; }
+        /* Modo fullscreen do card do grafo */
+        body.graph-card-expanded { overflow: hidden; }
+        .graph-card-fullscreen {
+            position: fixed !important;
+            inset: 16px !important;
+            z-index: 9000;
+            margin: 0 !important;
+            background: white;
+            border-radius: 24px;
+            box-shadow: 0 30px 80px rgba(0,0,0,0.25);
+            overflow: auto;
+            animation: graphCardOpen 0.25s ease-out;
+        }
+        @keyframes graphCardOpen {
+            from { transform: scale(0.96); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        .graph-card-backdrop {
+            position: fixed; inset: 0; z-index: 8999;
+            background: rgba(28, 25, 23, 0.45);
+            backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+            animation: graphBackdropFade 0.2s ease-out;
+        }
+        @keyframes graphBackdropFade {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
         /* Card hover */
         .evidence-card { transition: transform 0.15s, box-shadow 0.15s; }
         .evidence-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
@@ -1940,6 +1979,11 @@ async function loadInteractiveGraph(hostId = 'interactive-graph-container', opti
                         <div class="graph-legend-title">Camadas ativas</div>
                         <div id="${prefix}-legend-rows"></div>
                     </div>
+                    <!-- Botão expandir (fullscreen) -->
+                    <button type="button" class="graph-expand-btn" onclick="toggleGraphCardFullscreen('${hostId}')" title="Expandir para tela cheia">
+                        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5"/></svg>
+                        Expandir
+                    </button>
                     <!-- Botão recentrar -->
                     <button type="button" class="graph-recenter-btn" onclick="recenterGraph()" title="Recentrar o grafo (zoom e pan)">
                         <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4h5M4 4v5M4 4l5 5M20 4h-5M20 4v5M20 4l-5 5M4 20h5M4 20v-5M4 20l5-5M20 20h-5M20 20v-5M20 20l-5-5"/></svg>
@@ -2189,6 +2233,76 @@ function renderGraphLegend(data) {
         `;
     }).join('');
 }
+
+function toggleGraphCardFullscreen(hostId) {
+    const container = document.getElementById(hostId);
+    if (!container) return;
+    const card = container.querySelector('.section-card');
+    if (!card) return;
+
+    const isFullscreen = card.classList.contains('graph-card-fullscreen');
+    if (isFullscreen) {
+        // Sair do fullscreen
+        card.classList.remove('graph-card-fullscreen');
+        document.body.classList.remove('graph-card-expanded');
+        const backdrop = document.getElementById('graph-card-backdrop');
+        if (backdrop) backdrop.remove();
+        // Restaura altura padrão dos hosts internos
+        const svgHost = document.getElementById(_graphState.ids.svg);
+        const panel = document.getElementById(_graphState.ids.panel);
+        if (svgHost) svgHost.style.height = '560px';
+        if (panel) panel.style.maxHeight = '560px';
+        // Atualiza label do botão
+        const expandBtn = card.querySelector('.graph-expand-btn');
+        if (expandBtn) {
+            expandBtn.innerHTML = `
+                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5"/></svg>
+                Expandir
+            `;
+        }
+    } else {
+        // Entrar em fullscreen
+        const backdrop = document.createElement('div');
+        backdrop.id = 'graph-card-backdrop';
+        backdrop.className = 'graph-card-backdrop';
+        backdrop.onclick = () => toggleGraphCardFullscreen(hostId);
+        document.body.appendChild(backdrop);
+        document.body.classList.add('graph-card-expanded');
+        card.classList.add('graph-card-fullscreen');
+        // Estica os hosts internos pra usar a tela cheia
+        const svgHost = document.getElementById(_graphState.ids.svg);
+        const panel = document.getElementById(_graphState.ids.panel);
+        const newH = Math.max(window.innerHeight - 320, 480);
+        if (svgHost) svgHost.style.height = newH + 'px';
+        if (panel) panel.style.maxHeight = newH + 'px';
+        // Atualiza label do botão
+        const expandBtn = card.querySelector('.graph-expand-btn');
+        if (expandBtn) {
+            expandBtn.innerHTML = `
+                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                Fechar
+            `;
+        }
+    }
+    // Re-renderiza o grafo nas novas dimensões (sem refetch)
+    if (_graphState.data) {
+        setTimeout(() => {
+            renderInteractiveGraphD3(_graphState.data);
+            renderGraphLegend(_graphState.data);
+        }, 280); // espera animação CSS terminar
+    }
+}
+
+// ESC fecha fullscreen
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.body.classList.contains('graph-card-expanded')) {
+        const card = document.querySelector('.graph-card-fullscreen');
+        if (card) {
+            const container = card.closest('[id$="-container"]');
+            if (container) toggleGraphCardFullscreen(container.id);
+        }
+    }
+});
 
 function recenterGraph() {
     const svg = _graphState.svgSel;
