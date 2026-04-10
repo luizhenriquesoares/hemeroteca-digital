@@ -494,15 +494,28 @@ async def discovery_featured_graph(
 async def discovery_layered_graph(
     layers: str = Query("family,roles,co_mention", description="Camadas separadas por vírgula"),
     limit: int = Query(30, ge=5, le=80, description="Número máximo de nós"),
+    focus: int = Query(0, ge=0, description="ID da entidade para ego-network (0 = visão global)"),
+    depth: int = Query(2, ge=1, le=3, description="Profundidade do BFS (apenas com focus)"),
 ):
-    """Grafo interativo com filtro por camadas semânticas (família, cargos, justiça, etc)."""
+    """Grafo interativo com filtro por camadas semânticas.
+
+    Sem ``focus``: visão global das entidades mais conectadas.
+    Com ``focus=ID``: ego-network centrado na entidade, BFS até ``depth`` saltos.
+    """
     layers_list = sorted({l.strip() for l in layers.split(",") if l.strip()})
-    cache_key = ("layered_graph", tuple(layers_list), limit)
+    focus_id = focus if focus and focus > 0 else None
+    cache_key = ("layered_graph", tuple(layers_list), limit, focus_id, depth)
     cached = _cache_get(cache_key, ttl_seconds=120.0)
     if cached is not None:
         return cached
     from src.structured.graph_store import get_layered_graph
-    data = await run_in_threadpool(get_layered_graph, layers=layers_list, limit=limit)
+    data = await run_in_threadpool(
+        get_layered_graph,
+        layers=layers_list,
+        limit=limit,
+        focus_entity_id=focus_id,
+        focus_depth=depth,
+    )
     return _cache_set(cache_key, data)
 
 

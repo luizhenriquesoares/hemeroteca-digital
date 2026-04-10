@@ -1838,6 +1838,8 @@ const _graphState = {
     data: null,
     sim: null,
     selection: null,
+    focusEntityId: null,   // null = visão global; ID = ego-network centrado
+    focusEntityName: null, // nome do nó focado, para o breadcrumb
     ids: {
         toggles: 'graph-layer-toggles',
         svg: 'graph-svg-host',
@@ -1879,6 +1881,9 @@ async function loadInteractiveGraph(hostId = 'interactive-graph-container', opti
     if (options.defaultLayers) {
         _graphState.activeLayers = new Set(options.defaultLayers);
     }
+    // Reseta focus a cada (re)load do componente — começa sempre na visão global
+    _graphState.focusEntityId = null;
+    _graphState.focusEntityName = null;
     const title = options.title || 'A teia de Pernambuco no século XIX';
     const subtitle = options.subtitle || 'Pessoas, famílias e cargos atravessando 165 anos de jornais. Clique num nó ou aresta — a página real do jornal aparece à direita.';
     const eyebrow = options.eyebrow || 'Rede de Relações';
@@ -1905,6 +1910,7 @@ async function loadInteractiveGraph(hostId = 'interactive-graph-container', opti
                         ${renderFactSkeleton()}
                     </div>
                 ` : ''}
+                <div id="${prefix}-breadcrumb" class="hidden mb-3"></div>
                 <div id="${_graphState.ids.toggles}" class="flex flex-wrap gap-2"></div>
             </div>
             <div class="grid lg:grid-cols-[1.7fr_1fr]">
@@ -1933,9 +1939,10 @@ async function loadInteractiveGraph(hostId = 'interactive-graph-container', opti
             </div>
         </div>
     `;
-    // Armazena ids da legenda pra usar em refresh
+    // Armazena ids da legenda + breadcrumb pra usar em refresh
     _graphState.ids.legend = `${prefix}-legend`;
     _graphState.ids.legendRows = `${prefix}-legend-rows`;
+    _graphState.ids.breadcrumb = `${prefix}-breadcrumb`;
     renderLayerToggles();
     // Carrega fact strip + grafo em paralelo
     if (showFactStrip) loadGraphFactStrip();
@@ -2031,11 +2038,19 @@ async function refreshInteractiveGraph() {
     if (overlay) overlay.classList.remove('hidden');
     try {
         const layers = Array.from(_graphState.activeLayers).join(',');
-        const data = await fetchJsonWithTimeout(`${API}/api/discovery/graph?layers=${encodeURIComponent(layers)}&limit=22`, { timeout: 15000 });
+        let url = `${API}/api/discovery/graph?layers=${encodeURIComponent(layers)}&limit=22`;
+        if (_graphState.focusEntityId) {
+            url += `&focus=${_graphState.focusEntityId}&depth=2`;
+        }
+        const data = await fetchJsonWithTimeout(url, { timeout: 15000 });
         _graphState.data = data;
-        if (statsLine) statsLine.textContent = `${data.nodes.length} pessoas · ${data.edges.length} vínculos`;
+        if (statsLine) {
+            const focusLabel = _graphState.focusEntityId ? ' (ego-network)' : '';
+            statsLine.textContent = `${data.nodes.length} pessoas · ${data.edges.length} vínculos${focusLabel}`;
+        }
         renderInteractiveGraphD3(data);
         renderGraphLegend(data);
+        renderFocusBreadcrumb();
         // Re-renderiza empty state do painel agora que temos dados para sugerir,
         // mas só se ele ainda estiver mostrando o empty state (não uma ficha aberta).
         const panel = document.getElementById(_graphState.ids.panel);
@@ -2048,6 +2063,45 @@ async function refreshInteractiveGraph() {
     } finally {
         if (overlay) overlay.classList.add('hidden');
     }
+}
+
+function focusGraphOnEntity(entityId, entityName) {
+    if (!entityId) return;
+    _graphState.focusEntityId = entityId;
+    _graphState.focusEntityName = entityName || `Entidade ${entityId}`;
+    refreshInteractiveGraph();
+}
+
+function clearGraphFocus() {
+    if (!_graphState.focusEntityId) return;
+    _graphState.focusEntityId = null;
+    _graphState.focusEntityName = null;
+    // Fecha o painel também — usuário voltou pra visão geral
+    closeGraphPanel();
+    refreshInteractiveGraph();
+}
+
+function renderFocusBreadcrumb() {
+    // Procura o container de breadcrumb (criado no header do componente)
+    const host = document.getElementById(_graphState.ids.breadcrumb);
+    if (!host) return;
+    if (!_graphState.focusEntityId) {
+        host.innerHTML = '';
+        host.classList.add('hidden');
+        return;
+    }
+    host.classList.remove('hidden');
+    host.innerHTML = `
+        <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-xs">
+            <button onclick="clearGraphFocus()" class="text-amber-800 hover:text-amber-900 font-medium inline-flex items-center gap-1">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+                Vista global
+            </button>
+            <span class="text-amber-300">›</span>
+            <span class="text-amber-900 font-semibold">${escapeHtml(_graphState.focusEntityName || '...')}</span>
+            <span class="text-[10px] text-amber-600 ml-1 uppercase tracking-wider">ego-network</span>
+        </div>
+    `;
 }
 
 function renderGraphLegend(data) {
@@ -2529,9 +2583,14 @@ function renderEntityPanel(entity, nodeData) {
             </div>
         ` : ''}
 
-        <div class="panel-section flex gap-2">
-            <button onclick="loadEntityById(${entity.id})" class="flex-1 px-3 py-2 rounded-xl bg-stone-900 text-white text-xs font-medium hover:bg-stone-800">
-                Abrir dossiê completo
+        <div class="panel-section grid grid-cols-2 gap-2">
+            <button onclick="focusGraphOnEntity(${entity.id}, '${escapeHtml(entity.canonical_name || '').replace(/'/g, "\\'")}')"
+                class="px-3 py-2 rounded-xl bg-amber-100 border border-amber-300 text-amber-900 text-xs font-medium hover:bg-amber-200 inline-flex items-center justify-center gap-1.5">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                Centrar grafo aqui
+            </button>
+            <button onclick="loadEntityById(${entity.id})" class="px-3 py-2 rounded-xl bg-stone-900 text-white text-xs font-medium hover:bg-stone-800">
+                Abrir dossiê
             </button>
         </div>
     `;

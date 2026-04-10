@@ -945,15 +945,21 @@ def _predicate_to_layer(predicate: str) -> str | None:
 
 def get_layered_graph(
     db_path: Path = STRUCTURED_DB,
-    layers: list[str] | None = None,
+    layers=None,
     limit: int = 30,
     min_shared_pages: int = 4,
     min_confidence: float = 0.4,
+    focus_entity_id=None,
+    focus_depth: int = 2,
 ) -> dict:
     """Grafo com filtro por camadas semânticas (família, cargos, justiça, etc).
 
     Cada aresta vem etiquetada com a camada e o predicado original. Co-menção
     só entra se a camada estiver explicitamente solicitada (é cara e ruidosa).
+
+    Se ``focus_entity_id`` for fornecido, retorna um ego-network: a entidade
+    central + vizinhança até ``focus_depth`` saltos, seguindo apenas as camadas
+    selecionadas.
     """
     layers = layers or ["family", "roles", "co_mention"]
     layer_set = {l.strip() for l in layers if l.strip()}
@@ -964,6 +970,19 @@ def get_layered_graph(
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+
+    # === Modo ego-network (focus) ===
+    if focus_entity_id:
+        return _build_ego_network(
+            conn,
+            focus_entity_id=int(focus_entity_id),
+            depth=max(1, min(int(focus_depth), 3)),
+            layer_set=layer_set,
+            selected_predicates=selected_predicates,
+            min_shared_pages=min_shared_pages,
+            min_confidence=min_confidence,
+            limit=limit,
+        )
 
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
@@ -1242,4 +1261,260 @@ def get_edge_evidence(
         "target": {"id": int(target["id"]), "name": target["canonical_name"], "type": target["type"]},
         "shared_pages": shared_pages,
         "direct_relations": direct_relations,
+    }
+
+
+def _build_ego_network(
+    conn: sqlite3.Connection,
+    *,
+    focus_entity_id: int,
+    depth: int,
+    layer_set: set[str],
+    selected_predicates: set[str],
+    min_shared_pages: int,
+    min_confidence: float,
+    limit: int,
+) -> dict:
+    """BFS a partir de uma entidade central, seguindo só predicados das camadas ativas.
+
+    Retorna o mesmo formato de get_layered_graph (nodes/edges/layers_active),
+    para que o renderer do front não precise mudar.
+    """
+    nodes: dict[str, dict] = {}
+    edges: list[dict] = []
+    seen_edges: set[tuple] = set()  # (source, target, predicate) para deduplicação
+
+    # Carrega entidade central primeiro (para garantir que ela exista mesmo sem vizinhos)
+    central = conn.execute(
+        """
+        SELECT e.id, e.canonical_name, e.type,
+               COUNT(DISTINCT m.id) AS mentions
+        FROM entities e
+        LEFT JOIN entity_mentions m ON m.entity_id = e.id
+        WHERE e.id = ?
+        GROUP BY e.id
+        """,
+        (focus_entity_id,),
+    ).fetchone()
+    if not central:
+        return {
+            "nodes": [],
+            "edges": [],
+            "layers_active": sorted(layer_set),
+            "focus": {"entity_id": focus_entity_id, "found": False},
+        }
+
+    central_nid = f"entity_{focus_entity_id}"
+    nodes[central_nid] = {
+        "id": central_nid,
+        "entity_id": int(focus_entity_id),
+        "label": central["canonical_name"],
+        "type": central["type"] or "person",
+        "mentions": int(central["mentions"] or 0),
+        "role": "",
+        "central": True,
+        "layers": [],
+    }
+
+    visited: set[int] = {focus_entity_id}
+    frontier: set[int] = {focus_entity_id}
+
+    for hop in range(depth):
+        if not frontier or len(nodes) >= limit:
+            break
+        next_frontier: set[int] = set()
+        ids_csv = ",".join(str(i) for i in frontier)
+
+        # 1. Relações biográficas das camadas selecionadas, que tocam a fronteira
+        if selected_predicates:
+            placeholders = ",".join("?" * len(selected_predicates))
+            rows = conn.execute(
+                f"""
+                SELECT r.id, r.subject_entity_id, r.object_entity_id, r.predicate,
+                       r.confidence,
+                       se.canonical_name AS subject_name, se.type AS subject_type,
+                       oe.canonical_name AS object_name, oe.type AS object_type
+                FROM relations r
+                JOIN entities se ON se.id = r.subject_entity_id
+                LEFT JOIN entities oe ON oe.id = r.object_entity_id
+                WHERE r.predicate IN ({placeholders})
+                  AND r.confidence >= ?
+                  AND r.object_entity_id IS NOT NULL
+                  AND (r.subject_entity_id IN ({ids_csv}) OR r.object_entity_id IN ({ids_csv}))
+                  AND LENGTH(se.canonical_name) >= 6
+                  AND LENGTH(oe.canonical_name) >= 6
+                ORDER BY r.confidence DESC
+                LIMIT ?
+                """,
+                (*selected_predicates, min_confidence, limit * 4),
+            ).fetchall()
+
+            for row in rows:
+                if len(nodes) >= limit:
+                    break
+                layer = _predicate_to_layer(row["predicate"])
+                if not layer:
+                    continue
+
+                sid_int = int(row["subject_entity_id"])
+                oid_int = int(row["object_entity_id"])
+
+                # Adiciona nó se ainda não existe (e for legível)
+                for eid, name, etype in [
+                    (sid_int, row["subject_name"], row["subject_type"] or "person"),
+                    (oid_int, row["object_name"], row["object_type"] or "person"),
+                ]:
+                    nid = f"entity_{eid}"
+                    if nid not in nodes:
+                        if etype == "person" and not _is_graph_legible(name):
+                            continue
+                        nodes[nid] = {
+                            "id": nid,
+                            "entity_id": eid,
+                            "label": name,
+                            "type": etype,
+                            "mentions": 0,
+                            "role": "",
+                            "central": False,
+                            "layers": [],
+                        }
+                        if eid not in visited:
+                            next_frontier.add(eid)
+                            visited.add(eid)
+
+                sid_n = f"entity_{sid_int}"
+                oid_n = f"entity_{oid_int}"
+                if sid_n not in nodes or oid_n not in nodes:
+                    continue
+                edge_key = (sid_n, oid_n, row["predicate"])
+                if edge_key in seen_edges:
+                    continue
+                seen_edges.add(edge_key)
+                if layer not in nodes[sid_n]["layers"]:
+                    nodes[sid_n]["layers"].append(layer)
+                if layer not in nodes[oid_n]["layers"]:
+                    nodes[oid_n]["layers"].append(layer)
+                edges.append({
+                    "source": sid_n,
+                    "target": oid_n,
+                    "predicate": row["predicate"],
+                    "layer": layer,
+                    "label": PREDICATE_LABELS.get(row["predicate"], row["predicate"]),
+                    "weight": 3,
+                    "relation_id": int(row["id"]),
+                    "confidence": float(row["confidence"]),
+                })
+
+        # 2. Co-menção (se solicitada) — só vizinhos diretos da fronteira atual
+        if "co_mention" in layer_set and len(nodes) < limit:
+            pairs = conn.execute(
+                f"""
+                SELECT
+                    e1.id AS id_a, e1.canonical_name AS name_a,
+                    e2.id AS id_b, e2.canonical_name AS name_b,
+                    COUNT(DISTINCT m1.page_id) AS shared_pages
+                FROM entity_mentions m1
+                JOIN entity_mentions m2 ON m2.page_id = m1.page_id AND m2.entity_id != m1.entity_id
+                JOIN entities e1 ON e1.id = m1.entity_id
+                JOIN entities e2 ON e2.id = m2.entity_id
+                WHERE (m1.entity_id IN ({ids_csv}) OR m2.entity_id IN ({ids_csv}))
+                  AND e1.type = 'person' AND e2.type = 'person'
+                  AND e1.id < e2.id
+                  AND LENGTH(e1.canonical_name) >= 8
+                  AND LENGTH(e2.canonical_name) >= 8
+                GROUP BY m1.entity_id, m2.entity_id
+                HAVING shared_pages >= ?
+                ORDER BY shared_pages DESC
+                LIMIT ?
+                """,
+                (min_shared_pages, limit * 2),
+            ).fetchall()
+
+            for pair in pairs:
+                if len(nodes) >= limit:
+                    break
+                aid, bid = int(pair["id_a"]), int(pair["id_b"])
+
+                for eid, name in [(aid, pair["name_a"]), (bid, pair["name_b"])]:
+                    nid = f"entity_{eid}"
+                    if nid not in nodes:
+                        if not _is_graph_legible(name):
+                            continue
+                        nodes[nid] = {
+                            "id": nid,
+                            "entity_id": eid,
+                            "label": name,
+                            "type": "person",
+                            "mentions": 0,
+                            "role": "",
+                            "central": False,
+                            "layers": [],
+                        }
+                        if eid not in visited:
+                            next_frontier.add(eid)
+                            visited.add(eid)
+
+                a_n, b_n = f"entity_{aid}", f"entity_{bid}"
+                if a_n not in nodes or b_n not in nodes:
+                    continue
+                edge_key = (a_n, b_n, "co_mention")
+                if edge_key in seen_edges:
+                    continue
+                seen_edges.add(edge_key)
+                if "co_mention" not in nodes[a_n]["layers"]:
+                    nodes[a_n]["layers"].append("co_mention")
+                if "co_mention" not in nodes[b_n]["layers"]:
+                    nodes[b_n]["layers"].append("co_mention")
+                edges.append({
+                    "source": a_n,
+                    "target": b_n,
+                    "predicate": "co_mention",
+                    "layer": "co_mention",
+                    "label": f"{pair['shared_pages']} págs.",
+                    "weight": int(pair["shared_pages"]),
+                })
+
+        frontier = next_frontier
+
+    # Enriquece nós com cargo + contagem de menções
+    if nodes:
+        entity_ids = [n["entity_id"] for n in nodes.values()]
+        id_list = ",".join(str(i) for i in entity_ids)
+        for row in conn.execute(f"""
+            SELECT entity_id, COUNT(*) AS c FROM entity_mentions
+            WHERE entity_id IN ({id_list}) GROUP BY entity_id
+        """).fetchall():
+            nid = f"entity_{row['entity_id']}"
+            if nid in nodes:
+                nodes[nid]["mentions"] = int(row["c"])
+
+        for row in conn.execute(f"""
+            SELECT r.subject_entity_id, COALESCE(o.canonical_name, r.object_literal) AS role
+            FROM relations r LEFT JOIN entities o ON o.id = r.object_entity_id
+            WHERE r.predicate = 'holds_role' AND r.subject_entity_id IN ({id_list})
+            ORDER BY r.confidence DESC
+        """).fetchall():
+            nid = f"entity_{row['subject_entity_id']}"
+            if nid in nodes and not nodes[nid]["role"]:
+                nodes[nid]["role"] = row["role"] or ""
+
+    conn.close()
+
+    return {
+        "nodes": list(nodes.values()),
+        "edges": edges,
+        "layers_active": sorted(layer_set),
+        "layer_meta": {
+            layer: {
+                "label": LAYER_LABELS.get(layer, layer),
+                "color": LAYER_COLORS.get(layer, "#78716c"),
+            }
+            for layer in LAYER_LABELS
+        },
+        "focus": {
+            "entity_id": int(focus_entity_id),
+            "name": central["canonical_name"],
+            "depth": depth,
+            "found": True,
+        },
     }
