@@ -1114,36 +1114,76 @@ def get_layered_graph(
             })
 
     # 1. Carrega relações biográficas das camadas selecionadas
+    # Aceita tanto object_entity_id (relação entre 2 pessoas) quanto object_literal
+    # (cargo/evento/literal — vira um nó tipo "literal" compartilhado entre pessoas)
+    # Para distribuir variedade entre predicados, faz uma query por predicado e
+    # pega top N de cada (em vez de uma query única que seria dominada por roles)
     if selected_predicates:
-        placeholders = ",".join("?" * len(selected_predicates))
-        rows = conn.execute(
-            f"""
-            SELECT r.id, r.subject_entity_id, r.object_entity_id, r.predicate,
-                   r.object_literal, r.confidence,
-                   se.canonical_name AS subject_name, se.type AS subject_type,
-                   oe.canonical_name AS object_name, oe.type AS object_type
-            FROM relations r
-            JOIN entities se ON se.id = r.subject_entity_id
-            LEFT JOIN entities oe ON oe.id = r.object_entity_id
-            WHERE r.predicate IN ({placeholders})
-              AND r.confidence >= ?
-              AND LENGTH(se.canonical_name) >= 6
-              AND r.object_entity_id IS NOT NULL
-              AND LENGTH(oe.canonical_name) >= 6
-            ORDER BY r.confidence DESC
-            LIMIT ?
-            """,
-            (*selected_predicates, min_confidence, limit * 8),
-        ).fetchall()
+        per_predicate_limit = max(20, limit * 2)
+        rows = []
+        for pred in sorted(selected_predicates):
+            pred_rows = conn.execute(
+                """
+                SELECT r.id, r.subject_entity_id, r.object_entity_id, r.predicate,
+                       r.object_literal, r.confidence,
+                       se.canonical_name AS subject_name, se.type AS subject_type,
+                       oe.canonical_name AS object_name, oe.type AS object_type
+                FROM relations r
+                JOIN entities se ON se.id = r.subject_entity_id
+                LEFT JOIN entities oe ON oe.id = r.object_entity_id
+                WHERE r.predicate = ?
+                  AND r.confidence >= ?
+                  AND LENGTH(se.canonical_name) >= 6
+                  AND (
+                      (r.object_entity_id IS NOT NULL AND LENGTH(oe.canonical_name) >= 6)
+                      OR (r.object_literal IS NOT NULL AND LENGTH(r.object_literal) >= 4)
+                  )
+                ORDER BY r.confidence DESC, r.id DESC
+                LIMIT ?
+                """,
+                (pred, min_confidence, per_predicate_limit),
+            ).fetchall()
+            rows.extend(pred_rows)
+
+        # Helper: cria/recupera nó "literal" (cargo, lugar mencionado, etc)
+        def _ensure_literal_node(layer: str, literal_value: str) -> str:
+            slug = (literal_value or "").strip()[:40]
+            nid = f"literal_{layer}_{slug}"
+            if nid not in nodes:
+                nodes[nid] = {
+                    "id": nid,
+                    "entity_id": None,
+                    "label": slug,
+                    "type": "literal",
+                    "mentions": 0,
+                    "role": "",
+                    "central": False,
+                    "layers": [layer],
+                    "literal_value": slug,
+                }
+            return nid
 
         for row in rows:
             layer = _predicate_to_layer(row["predicate"])
             if not layer:
                 continue
             sid = _ensure_node(row["subject_entity_id"], row["subject_name"], row["subject_type"] or "person")
-            oid = _ensure_node(row["object_entity_id"], row["object_name"], row["object_type"] or "person")
-            if not sid or not oid:
+            if not sid:
                 continue
+
+            # Decide o destino: entidade real ou nó literal
+            if row["object_entity_id"]:
+                oid = _ensure_node(row["object_entity_id"], row["object_name"], row["object_type"] or "person")
+                if not oid:
+                    continue
+            elif row["object_literal"]:
+                literal = (row["object_literal"] or "").strip()
+                if len(literal) < 4:
+                    continue
+                oid = _ensure_literal_node(layer, literal)
+            else:
+                continue
+
             if layer not in nodes[sid]["layers"]:
                 nodes[sid]["layers"].append(layer)
             if layer not in nodes[oid]["layers"]:
@@ -1463,12 +1503,13 @@ def _build_ego_network(
         ids_csv = ",".join(str(i) for i in frontier)
 
         # 1. Relações biográficas das camadas selecionadas, que tocam a fronteira
+        # Aceita object_entity_id (entre 2 pessoas) ou object_literal (cargo/evento)
         if selected_predicates:
             placeholders = ",".join("?" * len(selected_predicates))
             rows = conn.execute(
                 f"""
                 SELECT r.id, r.subject_entity_id, r.object_entity_id, r.predicate,
-                       r.confidence,
+                       r.object_literal, r.confidence,
                        se.canonical_name AS subject_name, se.type AS subject_type,
                        oe.canonical_name AS object_name, oe.type AS object_type
                 FROM relations r
@@ -1476,14 +1517,16 @@ def _build_ego_network(
                 LEFT JOIN entities oe ON oe.id = r.object_entity_id
                 WHERE r.predicate IN ({placeholders})
                   AND r.confidence >= ?
-                  AND r.object_entity_id IS NOT NULL
-                  AND (r.subject_entity_id IN ({ids_csv}) OR r.object_entity_id IN ({ids_csv}))
+                  AND r.subject_entity_id IN ({ids_csv})
                   AND LENGTH(se.canonical_name) >= 6
-                  AND LENGTH(oe.canonical_name) >= 6
+                  AND (
+                      (r.object_entity_id IS NOT NULL AND LENGTH(oe.canonical_name) >= 6)
+                      OR (r.object_literal IS NOT NULL AND LENGTH(r.object_literal) >= 4)
+                  )
                 ORDER BY r.confidence DESC
                 LIMIT ?
                 """,
-                (*selected_predicates, min_confidence, limit * 4),
+                (*selected_predicates, min_confidence, limit * 6),
             ).fetchall()
 
             for row in rows:
@@ -1494,35 +1537,63 @@ def _build_ego_network(
                     continue
 
                 sid_int = int(row["subject_entity_id"])
-                oid_int = int(row["object_entity_id"])
 
-                # Adiciona nó se ainda não existe (e for legível)
-                for eid, name, etype in [
-                    (sid_int, row["subject_name"], row["subject_type"] or "person"),
-                    (oid_int, row["object_name"], row["object_type"] or "person"),
-                ]:
-                    nid = f"entity_{eid}"
-                    if nid not in nodes:
-                        if etype == "person" and not _is_graph_legible(name):
+                # Subject sempre é entidade
+                sid_n = f"entity_{sid_int}"
+                if sid_n not in nodes:
+                    if not _is_graph_legible(row["subject_name"]):
+                        continue
+                    nodes[sid_n] = {
+                        "id": sid_n,
+                        "entity_id": sid_int,
+                        "label": row["subject_name"],
+                        "type": row["subject_type"] or "person",
+                        "mentions": 0,
+                        "role": "",
+                        "central": False,
+                        "layers": [],
+                    }
+
+                # Object pode ser entidade ou literal
+                if row["object_entity_id"]:
+                    oid_int = int(row["object_entity_id"])
+                    oid_n = f"entity_{oid_int}"
+                    if oid_n not in nodes:
+                        if not _is_graph_legible(row["object_name"]):
                             continue
-                        nodes[nid] = {
-                            "id": nid,
-                            "entity_id": eid,
-                            "label": name,
-                            "type": etype,
+                        nodes[oid_n] = {
+                            "id": oid_n,
+                            "entity_id": oid_int,
+                            "label": row["object_name"],
+                            "type": row["object_type"] or "person",
                             "mentions": 0,
                             "role": "",
                             "central": False,
                             "layers": [],
                         }
-                        if eid not in visited:
-                            next_frontier.add(eid)
-                            visited.add(eid)
-
-                sid_n = f"entity_{sid_int}"
-                oid_n = f"entity_{oid_int}"
-                if sid_n not in nodes or oid_n not in nodes:
+                        if oid_int not in visited:
+                            next_frontier.add(oid_int)
+                            visited.add(oid_int)
+                elif row["object_literal"]:
+                    literal = (row["object_literal"] or "").strip()[:40]
+                    if len(literal) < 4:
+                        continue
+                    oid_n = f"literal_{layer}_{literal}"
+                    if oid_n not in nodes:
+                        nodes[oid_n] = {
+                            "id": oid_n,
+                            "entity_id": None,
+                            "label": literal,
+                            "type": "literal",
+                            "mentions": 0,
+                            "role": "",
+                            "central": False,
+                            "layers": [layer],
+                            "literal_value": literal,
+                        }
+                else:
                     continue
+
                 edge_key = (sid_n, oid_n, row["predicate"])
                 if edge_key in seen_edges:
                     continue

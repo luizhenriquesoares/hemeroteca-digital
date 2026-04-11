@@ -2422,6 +2422,11 @@ function renderInteractiveGraphD3(data) {
     // === NODES ===
     // Tamanho proporcional, com mínimo confortável de clique
     const nodeRadius = d => {
+        // Literal nodes (cargos/eventos) usam pílula — raio efetivo é metade da largura
+        if (d.type === 'literal') {
+            const labelLen = (d.label || '').length;
+            return Math.max(20, labelLen * 3.5 + 8);
+        }
         const base = d.central ? 13 : 9;
         const bonus = Math.sqrt((d.mentions || 1) / maxMentions) * 7;
         return base + bonus;
@@ -2437,6 +2442,8 @@ function renderInteractiveGraphD3(data) {
                 showEntityPanel(d.entity_id, d);
             } else if (d.type === 'parish_record' && d.parish_record_id) {
                 showParishPanel(d);
+            } else if (d.type === 'literal') {
+                showLiteralPanel(d);
             }
         })
         .on('mouseenter', function(event, d) {
@@ -2563,13 +2570,49 @@ function renderInteractiveGraphD3(data) {
         .attr('fill-opacity', 0.35)
         .attr('stroke', 'none');
 
-    // === Labels e círculos dos nós ===
-    node.append('circle')
+    // === Shapes dos nós ===
+    // Pessoas/entidades: círculo. Literals (cargos, eventos): retângulo arredondado.
+    const personNodes = node.filter(d => d.type !== 'literal');
+    const literalNodes = node.filter(d => d.type === 'literal');
+
+    personNodes.append('circle')
         .attr('r', nodeRadius)
         .attr('fill', d => d.central ? '#b45309' : nodePrimaryColor(d))
         .attr('fill-opacity', 0.95)
         .attr('stroke', '#fffdf8')
         .attr('stroke-width', d => d.central ? 3.5 : 2.5);
+
+    // Literals como pílulas (rect arredondado), tamanho proporcional ao label
+    literalNodes.each(function(d) {
+        const g = d3.select(this);
+        const label = d.label || '?';
+        const padding = 10;
+        // Estimativa de largura (Inter ~6.5px por char a 11px)
+        const w = Math.max(40, label.length * 7 + padding * 2);
+        const h = 22;
+        g.append('rect')
+            .attr('x', -w / 2).attr('y', -h / 2)
+            .attr('width', w).attr('height', h)
+            .attr('rx', 11).attr('ry', 11)
+            .attr('fill', nodePrimaryColor(d))
+            .attr('fill-opacity', 0.18)
+            .attr('stroke', nodePrimaryColor(d))
+            .attr('stroke-width', 1.5)
+            .attr('stroke-opacity', 0.85);
+        g.append('text')
+            .text(label)
+            .attr('text-anchor', 'middle')
+            .attr('dominant-baseline', 'middle')
+            .attr('dy', '0.05em')
+            .style('font-size', '10.5px')
+            .style('font-weight', '600')
+            .style('fill', nodePrimaryColor(d))
+            .style('pointer-events', 'none');
+        // Marca o tamanho pro collision force
+        d._isLiteral = true;
+        d._litWidth = w;
+        d._litHeight = h;
+    });
 
     // Truncamento mais agressivo: 14 chars para nós normais, 20 para central
     const truncName = (s, max = 14) => {
@@ -2580,13 +2623,13 @@ function renderInteractiveGraphD3(data) {
         return (lastSpace > 6 ? cut.slice(0, lastSpace) : cut) + '…';
     };
 
-    node.append('text')
+    personNodes.append('text')
         .attr('class', 'graph-node-label')
         .text(d => truncName(d.label, d.central ? 22 : 14))
         .attr('text-anchor', 'middle')
         .attr('dy', d => nodeRadius(d) + 14);
 
-    node.filter(d => d.role).append('text')
+    personNodes.filter(d => d.role).append('text')
         .attr('class', 'graph-node-label-role')
         .text(d => truncName(d.role, 16))
         .attr('text-anchor', 'middle')
@@ -3197,6 +3240,66 @@ function renderEntityPanel(entity, nodeData) {
             <button onclick="loadEntityById(${entity.id})" class="px-3 py-2 rounded-xl bg-stone-900 text-white text-xs font-medium hover:bg-stone-800">
                 Abrir dossiê
             </button>
+        </div>
+    `;
+}
+
+function showLiteralPanel(literalNode) {
+    const panel = document.getElementById(_graphState.ids.panel);
+    if (!panel) return;
+    panel.scrollTop = 0;
+
+    // Encontra todas as pessoas conectadas a este literal no grafo atual
+    const data = _graphState.data;
+    const connected = [];
+    if (data && data.edges) {
+        data.edges.forEach(e => {
+            const sid = typeof e.source === 'string' ? e.source : e.source?.id;
+            const tid = typeof e.target === 'string' ? e.target : e.target?.id;
+            if (sid === literalNode.id || tid === literalNode.id) {
+                const otherId = sid === literalNode.id ? tid : sid;
+                const otherNode = data.nodes.find(n => n.id === otherId);
+                if (otherNode && otherNode.entity_id) {
+                    connected.push({ node: otherNode, predicate: e.predicate, label: e.label });
+                }
+            }
+        });
+    }
+
+    const layer = literalNode.layers && literalNode.layers[0] || 'roles';
+    const layerColor = LAYER_COLOR_BY_ID[layer] || '#78716c';
+    const layerLabel = LAYER_DEFS.find(l => l.id === layer)?.label || layer;
+
+    panel.innerHTML = `
+        <div class="flex items-start justify-between gap-3 mb-4">
+            <div>
+                <p class="text-[10px] uppercase tracking-[0.18em] font-semibold" style="color:${layerColor};">${escapeHtml(layerLabel)}</p>
+                <h3 class="font-serif text-2xl text-stone-900 mt-1 leading-tight">${escapeHtml(literalNode.label || '?')}</h3>
+                <p class="text-xs text-stone-500 italic mt-1">Atributo compartilhado por ${connected.length} pessoa(s) no grafo</p>
+            </div>
+            <button onclick="closeGraphPanel()" class="text-stone-400 hover:text-stone-700 text-xl leading-none">×</button>
+        </div>
+
+        ${connected.length ? `
+            <div class="panel-section">
+                <p class="text-[10px] uppercase tracking-[0.16em] text-stone-400 font-semibold mb-2">Pessoas vinculadas</p>
+                <div class="space-y-2">
+                    ${connected.map(({node, predicate, label}) => `
+                        <button class="panel-suggest" onclick="showEntityPanel(${node.entity_id}, {label:'${escapeHtml(node.label).replace(/'/g, "\\'")}'})">
+                            <strong>${escapeHtml(node.label)}</strong>
+                            <small style="color:${layerColor};">${escapeHtml(label || predicate)}</small>
+                        </button>
+                    `).join('')}
+                </div>
+            </div>
+        ` : `
+            <p class="text-sm text-stone-500 italic">Nenhuma conexão visível neste recorte.</p>
+        `}
+
+        <div class="panel-section">
+            <p class="text-xs text-stone-500 italic">
+                Este nó representa um <strong>atributo</strong> (cargo, função ou evento) extraído dos jornais. Pessoas que aparecem ligadas a ele compartilham essa característica.
+            </p>
         </div>
     `;
 }
