@@ -167,6 +167,23 @@ async def index():
     )
 
 
+@app.get("/sobre", response_class=HTMLResponse)
+async def landing():
+    """Landing page institucional do projeto."""
+    landing_path = Path(__file__).parent.parent.parent / "frontend" / "landing.html"
+    return HTMLResponse(
+        content=landing_path.read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
+
+
+# Serve assets estáticos da landing (screenshots, etc)
+_FRONTEND_DIR = Path(__file__).parent.parent.parent / "frontend"
+_ASSETS_DIR = _FRONTEND_DIR / "assets"
+if _ASSETS_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=str(_ASSETS_DIR)), name="assets")
+
+
 @app.get("/api/buscar")
 async def buscar(
     q: str = Query(..., description="Texto de busca"),
