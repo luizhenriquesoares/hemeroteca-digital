@@ -1935,45 +1935,45 @@ async function loadInteractiveGraph(hostId = 'interactive-graph-container', opti
     container.classList.remove('hidden');
     container.innerHTML = `
         <div class="section-card rounded-[28px] overflow-hidden">
-            <div class="px-6 py-5 md:px-8 md:py-7 border-b border-stone-100 bg-[linear-gradient(135deg,_rgba(255,250,242,0.98),_rgba(255,255,255,0.94))]">
-                <div class="flex items-start justify-between gap-5 flex-wrap mb-5">
+            <div class="px-5 py-4 md:px-7 md:py-5 border-b border-stone-100 bg-[linear-gradient(135deg,_rgba(255,250,242,0.98),_rgba(255,255,255,0.94))]">
+                <div class="flex items-start justify-between gap-5 flex-wrap mb-3">
                     <div class="max-w-3xl">
-                        <h2 class="text-[11px] font-semibold uppercase tracking-[0.26em] ${eyebrowColor}">${escapeHtml(eyebrow)}</h2>
-                        <h3 class="font-serif text-[28px] md:text-[34px] text-stone-900 mt-2 leading-[1.1]">${escapeHtml(title)}</h3>
-                        <p class="text-sm md:text-base text-stone-600 mt-3 leading-relaxed">${escapeHtml(subtitle)}</p>
+                        <h2 class="text-[10px] font-semibold uppercase tracking-[0.24em] ${eyebrowColor}">${escapeHtml(eyebrow)}</h2>
+                        <h3 class="font-serif text-[22px] md:text-[26px] text-stone-900 mt-1 leading-[1.1]">${escapeHtml(title)}</h3>
+                        <p class="text-xs md:text-sm text-stone-600 mt-2 leading-snug">${escapeHtml(subtitle)}</p>
                     </div>
-                    <div class="text-xs text-stone-500 flex flex-col items-end gap-2">
-                        <span id="${_graphState.ids.stats}" class="meta-chip px-3 py-1.5 rounded-full">carregando...</span>
-                        <span class="text-[10px] text-stone-400 uppercase tracking-[0.16em]">scroll para zoom · arraste para mover</span>
+                    <div class="text-xs text-stone-500 flex flex-col items-end gap-1.5">
+                        <span id="${_graphState.ids.stats}" class="meta-chip px-3 py-1 rounded-full">carregando...</span>
+                        <span class="text-[9px] text-stone-400 uppercase tracking-[0.14em]">scroll para zoom · arraste para mover</span>
                     </div>
                 </div>
                 ${showFactStrip ? `
-                    <div id="${_graphState.ids.factStrip}" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+                    <div id="${_graphState.ids.factStrip}" class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
                         ${renderFactSkeleton()}
                     </div>
                 ` : ''}
-                <div id="${prefix}-breadcrumb" class="hidden mb-3"></div>
-                <div class="flex items-start justify-between gap-3 flex-wrap">
-                    <div id="${_graphState.ids.toggles}" class="flex flex-wrap gap-2"></div>
-                    <div class="inline-flex items-center rounded-full border border-stone-200 bg-white p-1 text-xs font-medium" role="tablist" aria-label="Modo de visualização">
+                <div id="${prefix}-breadcrumb" class="hidden mb-2"></div>
+                <div class="flex items-center justify-between gap-3 flex-wrap">
+                    <div id="${_graphState.ids.toggles}" class="flex flex-wrap gap-1.5"></div>
+                    <div class="inline-flex items-center rounded-full border border-stone-200 bg-white p-0.5 text-xs font-medium" role="tablist" aria-label="Modo de visualização">
                         <button type="button" id="${prefix}-mode-network"
                             onclick="setGraphViewMode('network')"
-                            class="px-3 py-1.5 rounded-full transition inline-flex items-center gap-1.5">
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path stroke-linecap="round" d="M7 6.5l3 4M17 6.5l-3 4M7 17.5l3-4M17 17.5l-3-4"/></svg>
+                            class="px-3 py-1 rounded-full transition inline-flex items-center gap-1.5">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path stroke-linecap="round" d="M7 6.5l3 4M17 6.5l-3 4M7 17.5l3-4M17 17.5l-3-4"/></svg>
                             Rede
                         </button>
                         <button type="button" id="${prefix}-mode-constellation"
                             onclick="setGraphViewMode('constellation')"
-                            class="px-3 py-1.5 rounded-full transition inline-flex items-center gap-1.5">
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>
+                            class="px-3 py-1 rounded-full transition inline-flex items-center gap-1.5">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>
                             Constelação
                         </button>
                     </div>
                 </div>
             </div>
-            <div class="grid lg:grid-cols-[1.7fr_1fr]">
-                <div class="relative" style="min-height:720px;">
-                    <div id="${_graphState.ids.svg}" class="graph-host" style="height:720px;border-right:1px solid #e7e5e4;"></div>
+            <div class="grid lg:grid-cols-[2.4fr_1fr]">
+                <div class="relative" style="min-height:760px;">
+                    <div id="${_graphState.ids.svg}" class="graph-host" style="height:760px;border-right:1px solid #e7e5e4;"></div>
                     <!-- Mini-legenda das camadas ativas -->
                     <div id="${prefix}-legend" class="graph-legend hidden">
                         <div class="graph-legend-title">Camadas ativas</div>
@@ -1996,7 +1996,7 @@ async function loadInteractiveGraph(hostId = 'interactive-graph-container', opti
                         </div>
                     </div>
                 </div>
-                <aside id="${_graphState.ids.panel}" class="graph-side-panel p-6 md:p-7 overflow-y-auto" style="max-height:720px;">
+                <aside id="${_graphState.ids.panel}" class="graph-side-panel p-5 md:p-6 overflow-y-auto" style="max-height:760px;">
                     ${renderGraphPanelEmpty()}
                 </aside>
             </div>
@@ -2015,9 +2015,9 @@ async function loadInteractiveGraph(hostId = 'interactive-graph-container', opti
 
 function renderFactSkeleton() {
     return Array.from({ length: 4 }, () => `
-        <div class="rounded-2xl border border-stone-200 bg-white/70 px-4 py-3">
-            <div class="h-7 w-20 bg-stone-100 rounded animate-pulse"></div>
-            <div class="h-3 w-24 bg-stone-100 rounded mt-2 animate-pulse"></div>
+        <div class="rounded-xl border border-stone-200 bg-white/70 px-3 py-2">
+            <div class="h-5 w-16 bg-stone-100 rounded animate-pulse"></div>
+            <div class="h-2.5 w-20 bg-stone-100 rounded mt-1.5 animate-pulse"></div>
         </div>
     `).join('');
 }
@@ -2058,10 +2058,10 @@ async function loadGraphFactStrip() {
             },
         ];
         host.innerHTML = facts.map(f => `
-            <div class="rounded-2xl border border-stone-200 bg-white/85 px-4 py-3 transition hover:bg-white hover:border-stone-300">
-                <div class="font-serif text-2xl md:text-[26px] ${f.color} leading-none">${escapeHtml(f.value)}</div>
-                <div class="text-[11px] text-stone-600 mt-2 leading-tight">${escapeHtml(f.label)}</div>
-                <div class="text-[10px] text-stone-400 mt-0.5 leading-tight">${escapeHtml(f.hint)}</div>
+            <div class="rounded-xl border border-stone-200 bg-white/85 px-3 py-2 transition hover:bg-white hover:border-stone-300">
+                <div class="font-serif text-lg md:text-[20px] ${f.color} leading-none">${escapeHtml(f.value)}</div>
+                <div class="text-[10px] text-stone-600 mt-1 leading-tight">${escapeHtml(f.label)}</div>
+                <div class="text-[9px] text-stone-400 leading-tight">${escapeHtml(f.hint)}</div>
             </div>
         `).join('');
     } catch (e) {
@@ -2252,8 +2252,8 @@ function toggleGraphCardFullscreen(hostId) {
         // Restaura altura padrão dos hosts internos
         const svgHost = document.getElementById(_graphState.ids.svg);
         const panel = document.getElementById(_graphState.ids.panel);
-        if (svgHost) svgHost.style.height = '720px';
-        if (panel) panel.style.maxHeight = '720px';
+        if (svgHost) svgHost.style.height = '760px';
+        if (panel) panel.style.maxHeight = '760px';
         // Atualiza label do botão
         const expandBtn = card.querySelector('.graph-expand-btn');
         if (expandBtn) {
@@ -2323,7 +2323,7 @@ function renderInteractiveGraphD3(data) {
     if (!host || !d3) return;
     host.innerHTML = '';
     const width = host.clientWidth;
-    const height = host.clientHeight || 560;
+    const height = host.clientHeight || 760;
 
     if (!data.nodes || data.nodes.length < 2) {
         host.innerHTML = '<div class="p-8 text-center"><p class="text-sm text-stone-400">Sem dados suficientes nas camadas selecionadas.</p><p class="text-xs text-stone-400 mt-2">Tente ativar mais camadas acima.</p></div>';
@@ -2423,9 +2423,11 @@ function renderInteractiveGraphD3(data) {
     // Tamanho proporcional, com mínimo confortável de clique
     const nodeRadius = d => {
         // Literal nodes (cargos/eventos) usam pílula — raio efetivo é metade da largura
+        // Truncado a 18 chars + max width 140 → raio máximo ~75
         if (d.type === 'literal') {
-            const labelLen = (d.label || '').length;
-            return Math.max(20, labelLen * 3.5 + 8);
+            const truncLen = Math.min((d.label || '').length, 18);
+            const w = Math.min(140, Math.max(48, truncLen * 6.5 + 20));
+            return w / 2 + 6;  // metade da largura + margem pra collision
         }
         const base = d.central ? 13 : 9;
         const bonus = Math.sqrt((d.mentions || 1) / maxMentions) * 7;
@@ -2582,32 +2584,45 @@ function renderInteractiveGraphD3(data) {
         .attr('stroke', '#fffdf8')
         .attr('stroke-width', d => d.central ? 3.5 : 2.5);
 
-    // Literals como pílulas (rect arredondado), tamanho proporcional ao label
+    // Helper de truncamento de literal — máximo 18 chars, corta na palavra
+    const truncLiteral = (s, max = 18) => {
+        if (!s) return '?';
+        const clean = s.trim();
+        if (clean.length <= max) return clean;
+        const cut = clean.slice(0, max);
+        const lastSpace = cut.lastIndexOf(' ');
+        return (lastSpace > 8 ? cut.slice(0, lastSpace) : cut) + '…';
+    };
+
+    // Literals como pílulas (rect arredondado), tamanho LIMITADO
     literalNodes.each(function(d) {
         const g = d3.select(this);
-        const label = d.label || '?';
+        const fullLabel = d.label || '?';
+        const label = truncLiteral(fullLabel, 18);
         const padding = 10;
-        // Estimativa de largura (Inter ~6.5px por char a 11px)
-        const w = Math.max(40, label.length * 7 + padding * 2);
+        // Largura fixa pra evitar pílulas gigantes (max ~140px)
+        const w = Math.min(140, Math.max(48, label.length * 6.5 + padding * 2));
         const h = 22;
         g.append('rect')
             .attr('x', -w / 2).attr('y', -h / 2)
             .attr('width', w).attr('height', h)
             .attr('rx', 11).attr('ry', 11)
             .attr('fill', nodePrimaryColor(d))
-            .attr('fill-opacity', 0.18)
+            .attr('fill-opacity', 0.16)
             .attr('stroke', nodePrimaryColor(d))
-            .attr('stroke-width', 1.5)
-            .attr('stroke-opacity', 0.85);
+            .attr('stroke-width', 1.4)
+            .attr('stroke-opacity', 0.75);
         g.append('text')
             .text(label)
             .attr('text-anchor', 'middle')
             .attr('dominant-baseline', 'middle')
             .attr('dy', '0.05em')
-            .style('font-size', '10.5px')
+            .style('font-size', '10px')
             .style('font-weight', '600')
             .style('fill', nodePrimaryColor(d))
             .style('pointer-events', 'none');
+        // Tooltip nativo do SVG mostra o label completo no hover
+        g.append('title').text(fullLabel);
         // Marca o tamanho pro collision force
         d._isLiteral = true;
         d._litWidth = w;
@@ -2657,7 +2672,8 @@ function renderInteractiveGraphD3(data) {
         .alphaDecay(0.045)
         .on('tick', () => {
             // Margens generosas — usa toda a tela
-            const padX = 100, padY = 80;
+            // Padding generoso pra pílulas literais não saírem pelas bordas
+            const padX = 120, padY = 90;
             nodes.forEach(d => {
                 if (d.x < padX) d.x = padX;
                 if (d.x > width - padX) d.x = width - padX;
