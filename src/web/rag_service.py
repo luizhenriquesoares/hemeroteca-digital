@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from fastapi.responses import StreamingResponse
 
 from src.processing.search import extract_evidence_snippet, focus_query
+from src.web.page_utils import build_docreader_url
 
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
@@ -83,7 +84,10 @@ def _build_sources(question: str, termo_foco: str, resultados: list[dict], resol
             "edicao": meta.get("edicao", "?"),
             "score": result.get("score", 0),
             "evidencia": evidencia,
+            "evidence_type": "explicit_source",
+            "evidence_label": "Explicito na fonte",
             "image_url": resolve_image_url_fn(meta.get("bib", "?"), str(meta.get("pagina", "?"))),
+            "docreader_url": build_docreader_url(meta.get("bib", "?"), meta.get("pagina", "?")),
             "page_api_url": f"/api/page/{meta.get('bib', '?')}/{meta.get('pagina', '?')}",
             "page_view_url": f"/page/{meta.get('bib', '?')}/{meta.get('pagina', '?')}?q={quote(termo_foco or question)}",
         }

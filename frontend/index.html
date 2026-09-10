@@ -374,8 +374,8 @@
                     <div id="rag-response" class="rag-response px-5 py-4 text-sm text-stone-700 leading-relaxed"></div>
                     <div id="rag-structured" class="hidden px-5 py-4 bg-stone-50 border-t border-stone-100"></div>
                     <div id="rag-fontes" class="hidden px-5 py-3 bg-stone-50 border-t border-stone-100">
-                        <p class="text-xs font-medium text-stone-500 mb-2">Fontes consultadas:</p>
-                        <div id="rag-fontes-list" class="flex flex-wrap gap-2"></div>
+                        <p class="text-xs font-medium text-stone-500 mb-3">Provas documentais (expl&iacute;citas na fonte):</p>
+                        <div id="rag-fontes-list" class="grid gap-4 lg:grid-cols-2"></div>
                     </div>
                 </div>
             </div>
@@ -575,34 +575,16 @@ function renderResults(data) {
                 <span class="font-serif text-2xl text-stone-800">"${data.query}"</span>
                 <span class="text-xs px-2.5 py-1 rounded-full ${modo === 'textual' ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700'}">${modoLabel}</span>
             </div>
-            <p class="text-sm text-stone-500 mt-2">Os resultados abaixo priorizam relev&acirc;ncia, contexto documental e metadados do acervo.</p>
+            <p class="text-sm text-stone-500 mt-2">Os resultados abaixo destacam primeiro a prova documental: trecho citado, metadados editoriais e acesso direto &agrave; folha.</p>
         </div>
-        ${data.resultados.map((r, i) => `
-            <div class="fade-in section-card rounded-[22px] mb-4 overflow-hidden" style="animation-delay: ${i * 50}ms">
-                <div class="flex items-center gap-3 px-5 py-4 bg-white/70 border-b border-stone-100">
-                    <span class="text-xs font-mono text-stone-400">#${i + 1}</span>
-                    <div class="flex-1">
-                        <div class="w-28 h-1.5 rounded-full bg-stone-200 overflow-hidden">
-                            <div class="score-bar h-full rounded-full ${scoreColor(r.score)}" style="width: ${scoreWidth(r.score)}%"></div>
-                        </div>
-                    </div>
-                    <span class="text-xs font-medium ${r.score >= 0.6 ? 'text-emerald-700' : r.score >= 0.4 ? 'text-amber-700' : 'text-stone-500'}">
-                        ${modo === 'textual' ? (r.ocorrencias || '') + ' ocorr\u00eancias' : (r.score * 100).toFixed(0) + '% relev\u00e2ncia'}
-                    </span>
-                </div>
-                <div class="px-5 py-5">
-                    <div class="flex flex-wrap gap-2 mb-3 text-xs">
-                        <span class="px-2.5 py-1 bg-amber-50 text-amber-800 rounded-full border border-amber-200">
-                            ${r.metadata.bib || '?'}
-                        </span>
-                        ${r.metadata.ano ? `<span class="px-2.5 py-1 bg-blue-50 text-blue-800 rounded-full border border-blue-200">${r.metadata.ano}</span>` : ''}
-                        ${r.metadata.edicao ? `<span class="px-2.5 py-1 bg-stone-100 text-stone-600 rounded-full border border-stone-200">${r.metadata.edicao}</span>` : ''}
-                        ${r.metadata.pagina ? `<span class="px-2.5 py-1 bg-stone-100 text-stone-600 rounded-full border border-stone-200">P\u00e1g. ${r.metadata.pagina}</span>` : ''}
-                    </div>
-                    <p class="result-text text-sm text-stone-700 whitespace-pre-line">${modo === 'textual' ? highlightTerms(r.texto, data._query || data.query) : escapeHtml(r.texto)}</p>
-                </div>
-            </div>
-        `).join('')}
+        ${data.resultados.map((r, i) => renderEvidenceCard(r, {
+            query: data._query || data.query,
+            rank: i + 1,
+            scoreText: `${(r.score * 100).toFixed(0)}% ${modo === 'textual' ? 'aderencia textual' : 'relevancia'}`,
+            showFullText: true,
+            cardClassName: 'fade-in section-card rounded-[22px] mb-4 overflow-hidden',
+            animationDelayMs: i * 50,
+        })).join('')}
     `;
 }
 
@@ -610,6 +592,123 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+function normalizeEvidenceSource(item) {
+    const meta = item.metadata || {};
+    return {
+        bib: item.bib || meta.bib || '?',
+        pagina: item.pagina || meta.pagina || '?',
+        jornal: item.jornal || meta.jornal || meta.periodico || '?',
+        ano: item.ano || meta.ano || '?',
+        edicao: item.edicao || meta.edicao || '?',
+        evidencia: item.evidencia || '',
+        texto: item.texto || item.text || '',
+        image_url: item.image_url || meta.image_url || '',
+        page_view_url: item.page_view_url || '',
+        page_api_url: item.page_api_url || '',
+        docreader_url: item.docreader_url || '',
+        evidence_label: item.evidence_label || 'Explicito na fonte',
+        evidence_type: item.evidence_type || 'explicit_source',
+        score: typeof item.score === 'number' ? item.score : null,
+    };
+}
+
+function renderProvenanceBadge(label, tone = 'source') {
+    const cls = tone === 'inference'
+        ? 'bg-violet-100 text-violet-800 border-violet-200'
+        : 'bg-emerald-100 text-emerald-800 border-emerald-200';
+    return `<span class="inline-flex items-center px-2.5 py-1 rounded-full border text-[11px] font-semibold uppercase tracking-[0.14em] ${cls}">${escapeHtml(label)}</span>`;
+}
+
+function formatEvidenceMeta(source) {
+    const parts = [];
+    if (source.jornal && source.jornal !== '?') parts.push(source.jornal);
+    if (source.ano && source.ano !== '?') parts.push(source.ano);
+    if (source.edicao && source.edicao !== '?') parts.push(`ed. ${source.edicao}`);
+    if (source.pagina && source.pagina !== '?') parts.push(`pag. ${source.pagina}`);
+    if (source.bib && source.bib !== '?') parts.push(`acervo ${source.bib}`);
+    return parts.join(' · ');
+}
+
+function renderEvidenceActions(source) {
+    const links = [];
+    if (source.page_view_url || source.page_api_url) {
+        links.push(`<a class="px-3 py-2 rounded-xl border border-stone-200 bg-white text-xs font-medium text-stone-700 hover:bg-stone-50" href="${source.page_view_url || source.page_api_url}" target="_blank" rel="noreferrer">pagina local</a>`);
+    }
+    if (source.docreader_url) {
+        links.push(`<a class="px-3 py-2 rounded-xl border border-amber-200 bg-amber-50 text-xs font-medium text-amber-800 hover:bg-amber-100" href="${source.docreader_url}" target="_blank" rel="noreferrer">folha na BN</a>`);
+    }
+    if (source.image_url) {
+        links.push(`<a class="px-3 py-2 rounded-xl border border-stone-200 bg-white text-xs font-medium text-stone-700 hover:bg-stone-50" href="${source.image_url}" target="_blank" rel="noreferrer">imagem</a>`);
+    }
+    return links.join('');
+}
+
+function renderInlineDocumentLinks(source, options = {}) {
+    const linkClassName = options.linkClassName || 'text-amber-700 hover:underline';
+    const links = [];
+    if (source.page_view_url || source.page_api_url) {
+        links.push(`<a class="${linkClassName}" href="${source.page_view_url || source.page_api_url}" target="_blank" rel="noreferrer">ver página</a>`);
+    }
+    if (source.docreader_url) {
+        links.push(`<a class="${linkClassName}" href="${source.docreader_url}" target="_blank" rel="noreferrer">folha na BN</a>`);
+    }
+    if (source.image_url) {
+        links.push(`<a class="${linkClassName}" href="${source.image_url}" target="_blank" rel="noreferrer">imagem</a>`);
+    }
+    return links.join('');
+}
+
+function renderEvidenceCard(item, options = {}) {
+    const source = normalizeEvidenceSource(item);
+    const query = options.query || '';
+    const citedText = (source.evidencia || source.texto || '').trim();
+    const fullText = (source.texto || '').trim();
+    const cardClassName = options.cardClassName || 'rounded-[22px] border border-stone-200 bg-white';
+    const delayStyle = Number.isFinite(options.animationDelayMs) ? ` style="animation-delay: ${options.animationDelayMs}ms"` : '';
+    const rankBlock = options.rank ? `<span class="text-xs font-mono text-stone-400">#${options.rank}</span>` : '';
+    const scoreBlock = options.scoreText ? `<span class="text-xs font-medium ${source.score >= 0.6 ? 'text-emerald-700' : source.score >= 0.4 ? 'text-amber-700' : 'text-stone-500'}">${escapeHtml(options.scoreText)}</span>` : '';
+    const citedHtml = query ? highlightTerms(citedText, query) : escapeHtml(citedText);
+    const fullHtml = query ? highlightTerms(fullText, query) : escapeHtml(fullText);
+    const fullTextBlock = options.showFullText && fullText && fullText !== citedText ? `
+        <details class="mt-4 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3">
+            <summary class="cursor-pointer text-xs font-medium text-stone-600">Ver transcricao completa do trecho</summary>
+            <p class="result-text text-sm text-stone-700 whitespace-pre-line mt-3">${fullHtml}</p>
+        </details>
+    ` : '';
+    const imageBlock = source.image_url ? `
+        <a href="${source.image_url}" target="_blank" rel="noreferrer" class="block overflow-hidden rounded-2xl border border-stone-200 bg-stone-50">
+            <img src="${source.image_url}" alt="Imagem da pagina ${escapeHtml(String(source.pagina || '?'))}" class="w-full h-full object-cover max-h-48">
+        </a>
+    ` : '';
+    const metaText = formatEvidenceMeta(source);
+
+    return `
+        <article class="${cardClassName}"${delayStyle}>
+            <div class="px-5 py-5">
+                <div class="flex items-start justify-between gap-3 flex-wrap">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        ${rankBlock}
+                        ${renderProvenanceBadge(source.evidence_label, 'source')}
+                    </div>
+                    ${scoreBlock}
+                </div>
+                <div class="mt-4 grid gap-4 ${imageBlock ? 'md:grid-cols-[160px_minmax(0,1fr)]' : ''}">
+                    ${imageBlock}
+                    <div>
+                        <div class="text-[11px] uppercase tracking-[0.18em] text-stone-500 font-semibold">Trecho citado</div>
+                        <p class="result-text text-sm text-stone-700 leading-relaxed whitespace-pre-line mt-2">${citedHtml || '<span class="text-stone-400 italic">Trecho nao disponivel.</span>'}</p>
+                        ${metaText ? `<div class="mt-3 text-xs text-stone-500">${escapeHtml(metaText)}</div>` : ''}
+                        <div class="mt-4 flex flex-wrap gap-2">
+                            ${renderEvidenceActions(source)}
+                        </div>
+                        ${fullTextBlock}
+                    </div>
+                </div>
+            </div>
+        </article>
+    `;
 }
 
 function getActiveFilters() {
@@ -749,7 +848,7 @@ function renderFeaturedEntity(data) {
                         ${snippet.jornal ? `<span>${escapeHtml(snippet.jornal)}</span>` : ''}
                         ${snippet.bib ? `<span>${escapeHtml(snippet.bib)} / ${escapeHtml(snippet.pagina || '?')}</span>` : ''}
                         ${snippet.year ? `<span>${escapeHtml(String(snippet.year))}</span>` : ''}
-                        ${snippet.page_view_url ? `<a class="text-amber-700 hover:underline" href="${snippet.page_view_url}" target="_blank" rel="noreferrer">ver página</a>` : ''}
+                        ${renderInlineDocumentLinks(snippet, { linkClassName: 'text-amber-700 hover:underline' })}
                     </div>
                 </div>
             ` : ''}
@@ -771,6 +870,7 @@ function renderFeaturedEntity(data) {
                     Ver perfil completo
                 </button>
                 ${snippet.page_view_url ? `<a class="px-4 py-2.5 rounded-2xl border border-stone-200 bg-white text-sm text-stone-700 hover:bg-stone-50" href="${snippet.page_view_url}" target="_blank" rel="noreferrer">Abrir a página citada</a>` : ''}
+                ${snippet.docreader_url ? `<a class="px-4 py-2.5 rounded-2xl border border-amber-200 bg-amber-50 text-sm text-amber-900 hover:bg-amber-100" href="${snippet.docreader_url}" target="_blank" rel="noreferrer">Abrir folha na BN</a>` : ''}
             </div>
         </div>
     `;
@@ -926,8 +1026,7 @@ function renderDiscoveryOverview(data) {
                                         </div>
                                     ` : ''}
                                     <div class="mt-3 flex gap-3 text-xs">
-                                        ${item.page_view_url ? `<a class="text-amber-700 hover:underline" href="${item.page_view_url}" target="_blank" rel="noreferrer">ver página</a>` : ''}
-                                        ${item.image_url ? `<a class="text-amber-700 hover:underline" href="${item.image_url}" target="_blank" rel="noreferrer">imagem</a>` : ''}
+                                        ${renderInlineDocumentLinks(item, { linkClassName: 'text-amber-700 hover:underline' })}
                                     </div>
                                 </article>
                             `).join('')}
@@ -1360,8 +1459,7 @@ function renderEntityComparison(data, candidateMatches = []) {
                                     ${item.left_snippet ? `<div class="mt-3 rounded-2xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-950"><div class="text-[11px] uppercase tracking-[0.16em] text-amber-700 mb-1">${escapeHtml(item.left_surface || data.left.canonical_name)}</div>${escapeHtml(item.left_snippet)}</div>` : ''}
                                     ${item.right_snippet ? `<div class="mt-3 rounded-2xl bg-sky-50 border border-sky-200 px-4 py-3 text-sm text-sky-950"><div class="text-[11px] uppercase tracking-[0.16em] text-sky-700 mb-1">${escapeHtml(item.right_surface || data.right.canonical_name)}</div>${escapeHtml(item.right_snippet)}</div>` : ''}
                                     <div class="mt-3 flex gap-3 text-xs">
-                                        ${item.page_view_url ? `<a class="text-amber-700 hover:underline" href="${item.page_view_url}" target="_blank" rel="noreferrer">ver página</a>` : ''}
-                                        ${item.image_url ? `<a class="text-amber-700 hover:underline" href="${item.image_url}" target="_blank" rel="noreferrer">imagem</a>` : ''}
+                                        ${renderInlineDocumentLinks(item, { linkClassName: 'text-amber-700 hover:underline' })}
                                     </div>
                                 </article>
                             `).join('')}
@@ -3428,10 +3526,13 @@ function renderEdgePanel(data, edgeData) {
                     </div>
                     <iframe src="${sharedPage.page_view_url}" class="graph-panel-frame" style="border:none;border-radius:0;min-height:340px;" loading="lazy"></iframe>
                 </div>
-                <a href="${sharedPage.page_view_url}" target="_blank" class="mt-2 inline-flex items-center gap-1 text-xs text-amber-700 hover:underline">
-                    Abrir página completa
-                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-                </a>
+                <div class="mt-2 flex flex-wrap gap-3 text-xs">
+                    <a href="${sharedPage.page_view_url}" target="_blank" class="inline-flex items-center gap-1 text-amber-700 hover:underline">
+                        Abrir página completa
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                    </a>
+                    ${sharedPage.docreader_url ? `<a href="${sharedPage.docreader_url}" target="_blank" class="inline-flex items-center gap-1 text-amber-700 hover:underline">Abrir folha na BN</a>` : ''}
+                </div>
             </div>
         ` : (!directRel?.evidence ? `<p class="text-sm text-stone-500 italic">Conexão estatística (co-presença em páginas), sem citação textual única para mostrar.</p>` : '')}
 
@@ -3440,9 +3541,12 @@ function renderEdgePanel(data, edgeData) {
                 <p class="text-[10px] uppercase tracking-[0.16em] text-stone-400 font-semibold mb-2">Outras páginas em comum (${data.shared_pages.length})</p>
                 <div class="space-y-1.5">
                     ${data.shared_pages.slice(1, 5).map(p => `
-                        <a href="${p.page_view_url}" target="_blank" class="block text-xs text-stone-600 hover:text-amber-700">
-                            → ${escapeHtml(p.jornal)} · ${escapeHtml(p.ano)} · pág. ${escapeHtml(p.pagina)}
-                        </a>
+                        <div class="text-xs text-stone-600">
+                            <a href="${p.page_view_url}" target="_blank" class="hover:text-amber-700">
+                                → ${escapeHtml(p.jornal)} · ${escapeHtml(p.ano)} · pág. ${escapeHtml(p.pagina)}
+                            </a>
+                            ${p.docreader_url ? `<a href="${p.docreader_url}" target="_blank" class="ml-2 text-amber-700 hover:underline">folha na BN</a>` : ''}
+                        </div>
                     `).join('')}
                 </div>
             </div>
@@ -3959,8 +4063,7 @@ function renderEntityDossier(entity, candidates = []) {
                                     <p class="text-stone-600 mt-1">${escapeHtml(item.snippet)}</p>
                                     <div class="mt-1 text-xs text-stone-500 flex flex-wrap gap-2">
                                         <span>${escapeHtml(item.jornal || '?')} · ${escapeHtml(item.bib)} / ${escapeHtml(item.pagina)}</span>
-                                        ${(item.page_view_url || item.page_api_url) ? `<a class="text-amber-700 hover:underline" href="${item.page_view_url || item.page_api_url}" target="_blank" rel="noreferrer">ver página</a>` : ''}
-                                        ${item.image_url ? `<a class="text-amber-700 hover:underline" href="${item.image_url}" target="_blank" rel="noreferrer">imagem</a>` : ''}
+                                        ${renderInlineDocumentLinks(item, { linkClassName: 'text-amber-700 hover:underline' })}
                                     </div>
                                 </li>
                             `).join('')}
@@ -4025,8 +4128,7 @@ function renderEntityDossier(entity, candidates = []) {
                                     <span>${escapeHtml(item.bib)} / ${escapeHtml(item.pagina)}</span>
                                     ${item.ano && item.ano !== '?' ? `<span class="px-2 py-1 bg-amber-50 text-amber-700 rounded-full text-xs">${escapeHtml(item.ano)}</span>` : ''}
                                     <span class="ml-auto flex gap-2">
-                                        ${(item.page_view_url || item.page_api_url) ? `<a class="text-amber-700 hover:text-amber-900 font-medium" href="${item.page_view_url || item.page_api_url}" target="_blank" rel="noreferrer">ver pagina</a>` : ''}
-                                        ${item.image_url ? `<a class="text-amber-700 hover:text-amber-900 font-medium" href="${item.image_url}" target="_blank" rel="noreferrer">imagem</a>` : ''}
+                                        ${renderInlineDocumentLinks(item, { linkClassName: 'text-amber-700 hover:text-amber-900 font-medium' })}
                                     </span>
                                 </div>
                             </article>
@@ -4137,8 +4239,7 @@ function renderEntityDossier(entity, candidates = []) {
                                             ${item.year ? `<span>· ${escapeHtml(String(item.year))}</span>` : ''}
                                         </div>
                                         <div class="mt-3 flex gap-3 text-xs">
-                                            ${item.page_view_url ? `<a class="text-amber-700 hover:underline" href="${item.page_view_url}" target="_blank" rel="noreferrer">ver página</a>` : ''}
-                                            ${item.image_url ? `<a class="text-amber-700 hover:underline" href="${item.image_url}" target="_blank" rel="noreferrer">imagem</a>` : ''}
+                                            ${renderInlineDocumentLinks(item, { linkClassName: 'text-amber-700 hover:underline' })}
                                         </div>
                                     </article>
                                 `).join('')}
@@ -4607,7 +4708,7 @@ function renderD3Graph(container, data, centerEntityId) {
                             <p class="text-sm text-stone-700 italic">${escapeHtml(item.quote || '')}</p>
                             <div class="mt-2 text-xs text-stone-500 flex items-center gap-3 flex-wrap">
                                 <span>${escapeHtml(item.source_page || '?')}</span>
-                                ${item.page_view_url ? `<a class="text-amber-700 hover:underline" href="${item.page_view_url}" target="_blank" rel="noreferrer">ver página</a>` : ''}
+                                ${renderInlineDocumentLinks(item, { linkClassName: 'text-amber-700 hover:underline' })}
                             </div>
                         </article>
                     `).join('')}
@@ -4771,7 +4872,13 @@ async function doRAGSearch(query, bib, yearFrom, yearTo) {
                     ragResponse.innerHTML = marked.parse(fullText) + '<span class="typing-cursor"></span>';
                 }
                 if (data.done) {
-                    ragResponse.innerHTML = marked.parse(fullText);
+                    ragResponse.innerHTML = `
+                        <div class="mb-4 flex items-start gap-3 flex-wrap">
+                            ${renderProvenanceBadge('Inferencia do sistema', 'inference')}
+                            <p class="text-xs text-stone-500 max-w-2xl">Leitura sintetizada pela IA a partir das provas documentais abaixo. Use os cartoes de evidencia para confirmar antes de citar.</p>
+                        </div>
+                        <div>${marked.parse(fullText)}</div>
+                    `;
                     if (data.structured) {
                         const s = data.structured;
                         const pessoas = (s.pessoas || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
@@ -4783,23 +4890,32 @@ async function doRAGSearch(query, bib, yearFrom, yearTo) {
                             ragStructured.innerHTML = `
                                 <div class="grid gap-4 md:grid-cols-3">
                                     <section class="bg-white rounded-xl border border-stone-200 p-5 shadow-sm">
-                                        <div class="flex items-center gap-2 mb-3">
-                                            <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                                            <h3 class="text-xs font-semibold uppercase tracking-widest text-stone-500">Resumo</h3>
+                                        <div class="flex items-start justify-between gap-3 mb-3">
+                                            <div class="flex items-center gap-2">
+                                                <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                                                <h3 class="text-xs font-semibold uppercase tracking-widest text-stone-500">Resumo</h3>
+                                            </div>
+                                            ${renderProvenanceBadge('Inferencia do sistema', 'inference')}
                                         </div>
                                         ${resumo || '<p class="text-sm text-stone-400 italic">Sem resumo estruturado.</p>'}
                                     </section>
                                     <section class="bg-white rounded-xl border border-stone-200 p-5 shadow-sm">
-                                        <div class="flex items-center gap-2 mb-3">
-                                            <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                                            <h3 class="text-xs font-semibold uppercase tracking-widest text-stone-500">Pessoas e Entidades</h3>
+                                        <div class="flex items-start justify-between gap-3 mb-3">
+                                            <div class="flex items-center gap-2">
+                                                <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                                                <h3 class="text-xs font-semibold uppercase tracking-widest text-stone-500">Pessoas e Entidades</h3>
+                                            </div>
+                                            ${renderProvenanceBadge('Inferencia do sistema', 'inference')}
                                         </div>
                                         ${pessoas ? `<div class="space-y-2 text-sm text-stone-700">${(s.pessoas || []).map(item => `<div class="pl-3 border-l-2 border-amber-200 py-1">${stripParagraphWrapper(marked.parse(item))}</div>`).join('')}</div>` : '<p class="text-sm text-stone-400 italic">Nenhum nome detectado.</p>'}
                                     </section>
                                     <section class="bg-white rounded-xl border border-stone-200 p-5 shadow-sm">
-                                        <div class="flex items-center gap-2 mb-3">
-                                            <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
-                                            <h3 class="text-xs font-semibold uppercase tracking-widest text-stone-500">Evidencias</h3>
+                                        <div class="flex items-start justify-between gap-3 mb-3">
+                                            <div class="flex items-center gap-2">
+                                                <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+                                                <h3 class="text-xs font-semibold uppercase tracking-widest text-stone-500">Leituras guiadas pela fonte</h3>
+                                            </div>
+                                            ${renderProvenanceBadge('Inferencia do sistema', 'inference')}
                                         </div>
                                         ${evidencias ? `<div class="space-y-2 text-sm text-stone-700">${(s.evidencias || []).map(item => `<div class="pl-3 border-l-2 border-emerald-200 py-1 italic text-stone-600">${stripParagraphWrapper(marked.parse(item))}</div>`).join('')}</div>` : '<p class="text-sm text-stone-400 italic">Nenhuma evidencia.</p>'}
                                     </section>
@@ -4809,16 +4925,12 @@ async function doRAGSearch(query, bib, yearFrom, yearTo) {
                     }
                     if (data.fontes && data.fontes.length > 0) {
                         ragFontes.classList.remove('hidden');
+                        ragFontesList.className = 'grid gap-4 lg:grid-cols-2';
                         ragFontesList.innerHTML = data.fontes
                             .filter((f, i, arr) => arr.findIndex(x => x.bib === f.bib && x.pagina === f.pagina) === i)
-                            .slice(0, 10)
-                            .map(f => `
-                                <span class="text-xs px-2 py-1 bg-white rounded border border-stone-200 text-stone-600 inline-flex items-center gap-2">
-                                    <span>${f.jornal && f.jornal !== '?' ? f.jornal + ' · ' : ''}${f.bib} / ${f.pagina} ${f.ano !== '?' ? '(' + f.ano + ')' : ''}</span>
-                                    ${(f.page_view_url || f.page_api_url) ? `<a class="text-amber-700 hover:underline" href="${f.page_view_url || f.page_api_url}" target="_blank" rel="noreferrer">ver página</a>` : ''}
-                                    ${f.image_url ? `<a class="text-amber-700 hover:underline" href="${f.image_url}" target="_blank" rel="noreferrer">imagem</a>` : ''}
-                                </span>
-                            `).join('');
+                            .slice(0, 8)
+                            .map(f => renderEvidenceCard(f, { query }))
+                            .join('');
                     }
                 }
             } catch (e) {}

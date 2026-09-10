@@ -2,9 +2,11 @@
 
 import logging
 import os
+from pathlib import Path
 
 import chromadb
 from chromadb.config import Settings
+from dotenv import load_dotenv
 
 from src.config import CHROMA_DIR, CHROMA_COLLECTION, EMBEDDING_MODEL, EMBEDDING_PROVIDER
 from src.processing.chunker import carregar_chunks
@@ -13,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 _client = None
 _collection = None
+
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 
 def get_client() -> chromadb.ClientAPI:
@@ -30,8 +34,11 @@ def _create_embedding_fn():
     """Cria a função de embedding baseada no provider configurado."""
     if EMBEDDING_PROVIDER == "openai":
         from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+        api_key = os.getenv("CHROMA_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+        if api_key and not os.getenv("CHROMA_OPENAI_API_KEY"):
+            os.environ["CHROMA_OPENAI_API_KEY"] = api_key
         return OpenAIEmbeddingFunction(
-            api_key=os.getenv("OPENAI_API_KEY"),
+            api_key=api_key,
             model_name=EMBEDDING_MODEL,
         )
     else:

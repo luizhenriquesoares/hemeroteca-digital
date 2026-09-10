@@ -196,7 +196,12 @@ def setup_acervo(
         fechar_dialog(driver)
         time.sleep(2)
 
-        low_res_src = wait_for_cache_url(driver)
+        low_res_src = wait_for_cache_url(
+            driver,
+            timeout=20,
+            captcha_visible_fn=captcha_visivel,
+            captcha_resolve_fn=lambda: resolver_captcha(driver, captcha_visivel),
+        )
         if low_res_src:
             break
 

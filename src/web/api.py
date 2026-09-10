@@ -22,11 +22,13 @@ from src.structured.repository import StructuredRepository
 from src.processing.search import (
     buscar_hibrida,
     buscar_textual_historica,
+    extract_evidence_snippet,
     normalize_text,
 )
 from src.web.entity_service import build_fallback_page, serialize_entity, serialize_entity_search_results
 from src.web.page_view import render_page_view
 from src.web.page_utils import (
+    build_docreader_url as _build_docreader_url_impl,
     busca_textual as _busca_textual,
     count_page_texts as _count_page_texts_impl,
     load_progress_status as _load_progress_status_impl,
@@ -73,6 +75,10 @@ def _resolve_image_url(bib: str, pagina: str) -> str | None:
     return _resolve_image_url_impl(IMAGES_DIR, bib, pagina)
 
 
+def _build_docreader_url(bib: str, pagina: str | int | None) -> str | None:
+    return _build_docreader_url_impl(bib, pagina)
+
+
 def _serialize_page_record(page: dict) -> dict:
     return _serialize_page_record_impl(page, IMAGES_DIR)
 
@@ -115,15 +121,19 @@ def _serialize_entity_comparison(payload: dict) -> dict:
 
 
 def _attach_page_links(item: dict, highlight: str | None = None) -> dict:
-    bib = str(item.get("bib") or "")
-    pagina = str(item.get("pagina") or "")
+    metadata = item.get("metadata") or {}
+    bib = str(item.get("bib") or metadata.get("bib") or "")
+    pagina = str(item.get("pagina") or metadata.get("pagina") or "")
     if not bib or not pagina:
         return item
+    item.setdefault("bib", bib)
+    item.setdefault("pagina", pagina)
     item["page_api_url"] = f"/api/page/{bib}/{pagina}"
     item["page_view_url"] = f"/page/{bib}/{pagina}"
     if highlight:
         item["page_view_url"] += f"?q={quote(str(highlight))}"
     item["image_url"] = _resolve_image_url(bib, pagina)
+    item["docreader_url"] = _build_docreader_url(bib, pagina)
     return item
 
 
@@ -135,6 +145,34 @@ def _serialize_featured_entity(payload: dict) -> dict:
             highlight=snippet.get("surface_form") or payload.get("canonical_name"),
         )
     return payload
+
+
+def _serialize_search_result(query: str, item: dict) -> dict:
+    payload = dict(item)
+    metadata = dict(payload.get("metadata") or {})
+    bib = str(metadata.get("bib") or "")
+    pagina = str(metadata.get("pagina") or "")
+    if bib:
+        payload.setdefault("bib", bib)
+    if pagina:
+        payload.setdefault("pagina", pagina)
+    for key in ("jornal", "periodico", "ano", "edicao"):
+        if metadata.get(key) and key not in payload:
+            payload[key] = metadata.get(key)
+    payload["metadata"] = metadata
+    payload["evidencia"] = extract_evidence_snippet(query, payload.get("texto", ""))
+    payload["evidence_type"] = "explicit_source"
+    payload["evidence_label"] = "Explicito na fonte"
+    if bib and pagina:
+        _attach_page_links(
+            payload,
+            highlight=payload.get("matched_tokens", [query])[:1][0] if payload.get("matched_tokens") else query,
+        )
+    return payload
+
+
+def _serialize_search_results(query: str, results: list[dict]) -> list[dict]:
+    return [_serialize_search_result(query, item) for item in results]
 
 
 def _cache_get(key: tuple, ttl_seconds: float):
@@ -208,7 +246,12 @@ async def buscar(
 
     resultados = _filter_results_by_year(resultados, year_from=year_from, year_to=year_to)
     filtrados = [r for r in resultados if r["score"] >= score_min]
-    return {"query": q, "total": len(filtrados[:n]), "resultados": filtrados[:n]}
+    final = filtrados[:n]
+    return {
+        "query": q,
+        "total": len(final),
+        "resultados": _serialize_search_results(q, final),
+    }
 
 @app.get("/api/stats")
 async def get_stats():
@@ -578,7 +621,7 @@ async def get_entity(entity_id: int):
     entity = await run_in_threadpool(repo.get_entity, entity_id)
     if not entity:
         return {"error": "Entidade não encontrada"}
-    return serialize_entity(entity, _resolve_image_url)
+    return serialize_entity(entity, _resolve_image_url, _build_docreader_url)
 
 
 @app.get("/api/entity-compare")
