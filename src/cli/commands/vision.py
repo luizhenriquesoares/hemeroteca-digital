@@ -54,11 +54,17 @@ def register_vision_commands(cli) -> None:
                 "  Recapture com: python main.py ocr-hires --bib <bib> --keep-images "
                 "(mantém o JPG em data/images/<bib>/)"
             )
-        auth_errors = [r for r in summary["results"] if "AuthenticationError" in str(r.get("error") or "")]
-        if auth_errors:
+        errors = [str(r.get("error") or "") for r in summary["results"]]
+        if any("AuthenticationError" in err for err in errors):
             console.print(
                 "\n[red]Credencial Anthropic inválida ou ausente.[/red] "
-                "Defina ANTHROPIC_API_KEY em .env (ou no ambiente) e rode de novo."
+                "Defina ANTHROPIC_API_KEY em .env ou faça `ant auth login`, e rode de novo."
+            )
+        if any("credit balance" in err for err in errors):
+            console.print(
+                "\n[red]A organização está sem créditos de API.[/red] "
+                "Compre créditos em https://console.anthropic.com/settings/billing "
+                "(Plans & Billing). Assinatura do Claude não vale para a API."
             )
         if summary["by_config"]:
             console.print("\n" + summary["table"])
