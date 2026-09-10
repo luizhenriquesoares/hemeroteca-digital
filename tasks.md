@@ -27,9 +27,11 @@ feito está listado no fim. Estratégia e decisões: `PLANO.md`. Estado: `PROJEC
 - [ ] Créditos de API no Console para o backend `api` (Batch a 50% só existe na API).
 - [x] Manifesto de 20 páginas douradas em `src/vision/golden.json`.
 - [ ] Recapturar as 19 páginas douradas sem imagem hi-res local (`ocr-hires --keep-images`).
-- [ ] `--dry-run` nas 20 páginas (tokens de entrada, grátis) e 1 página real por configuração.
+- [x] 1 página real por configuração (Claude Code): resultados em `PLANO.md`; Opus full effort low lidera, Haiku descartado.
+- [ ] Grade adaptativa ao tamanho do tipo (medir altura de linha por projeção) em vez de 4x3 fixa.
 - [ ] Rodar as 20 páginas nas 6 configurações; revisar 5 à mão (colunas, pessoas, relações, ortografia).
 - [ ] Configuração híbrida: OCR barato dedicado + Claude só na extração sobre texto (`--config ocr+opus-text`).
+- [ ] Aposentar o modo `structure` se as páginas densas confirmarem que `full` é melhor e mais barato.
 - [ ] Decidir a configuração de produção (qualidade por dólar) e registrar em `PLANO.md`.
 - [ ] Tiles por coluna detectada (projeção de pixels) se a grade uniforme cortar colunas.
 

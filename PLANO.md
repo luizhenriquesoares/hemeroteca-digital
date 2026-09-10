@@ -53,6 +53,38 @@ Estimativa prévia (20k tokens de entrada em tiles, 8k de saída, Batch): Opus 5
 (US$ 22k em 150k páginas), Sonnet 5 ≈ US$ 0,06 (US$ 9k), Sonnet só estrutura ≈ US$ 0,035
 (US$ 5k), híbrido OCR barato + Opus sobre texto ≈ US$ 0,04 (US$ 6k).
 
+## Resultados parciais do benchmark (2026-09-09, 1 página)
+
+Página `029033_01_00001` (capa de 7/11/1825, tipos grandes, ~2.100 caracteres), rodada pelo
+Claude Code headless (assinatura). Custo convertido para preço de API: entrada = recortes pela
+fórmula de pixels + prompt; saída = tokens reais (raciocínio incluso).
+
+| Configuração | Grade | Entrada | Saída | US$/pág | Batch | Tempo | Leitura |
+|---|---|---|---|---|---|---|---|
+| opus-full (effort low) | 4x3 | 19,9k | 3,3k | 0,18 | 0,09 | 45 s | Melhor: ortografia da época, segmentos e pessoa certos |
+| opus-full (effort low) | 2x2 | 7,6k | 2,4k | 0,10 | 0,05 | 36 s | Igual em texto; errou um sobrenome (Ferreira/Parreira) |
+| opus-full (effort low) | 3x2 | 10,7k | 3,7k | 0,14 | 0,07 | 48 s | Igual em texto; nome com [?] |
+| sonnet-full (effort low) | 4x3 | 19,9k | 6,1k | 0,10 | 0,05 | 86 s | Transcrição cheia de reconstruções [entre colchetes] nas bordas dos recortes |
+| sonnet-structure (medium) | 4x3 | 19,9k | 13,3k | 0,17 | 0,09 | 165 s | Pensa demais (10,6k tokens); pior e mais caro que o full |
+| haiku-full | 4x3 | 19,9k | 6,8k | 0,05 | 0,03 | 74 s | Moderniza a grafia, classifica venda de brigue como venda de escravizado; descartado |
+
+O que já dá para concluir:
+
+- Opus 5 com `effort low` é a leitura de referência: quase não raciocina (56 tokens) e preserva a
+  grafia. Sonnet 5 custa metade e perde qualidade nas bordas dos recortes. Haiku está fora.
+- O modo `structure` não compensa: gasta mais raciocínio que a transcrição e perde texto.
+  Produção deve usar `full` e derivar a estrutura do mesmo JSON.
+- A entrada (recortes) é mais da metade do custo do Opus. A grade precisa se adaptar ao tamanho
+  do tipo: 2x2 basta nesta capa, páginas densas de 4 colunas devem exigir 4x3 ou mais.
+- Extrapolação para 150k páginas com Opus full em Batch: US$ 7,5k (2x2) a 13,5k (4x3). Páginas
+  densas terão saída de 5 a 10k tokens, então o número final deve ficar entre isso e o dobro.
+- O que decide é a rodada nas 19 páginas douradas densas, que ainda precisam de captura hi-res.
+
+Lições de execução: o `--json-schema` do Claude Code não aceita `$defs` (o modelo devolvia os
+nomes das definições como chaves), o Sonnet sem `--effort` gastou 60k tokens de raciocínio numa
+página, e o custo informado pelo Claude Code inclui ~33k tokens de harness em cache, por isso a
+conversão para preço de API.
+
 ## Arquitetura alvo
 
 ```
