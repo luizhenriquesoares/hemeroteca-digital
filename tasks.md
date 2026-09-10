@@ -23,6 +23,8 @@ feito está listado no fim. Estratégia e decisões: `PLANO.md`. Estado: `PROJEC
 
 - [x] Pacote `src/vision`: schema (`PageExtraction`), tiles, leitor Claude com saída estruturada, benchmark.
 - [x] Comando `benchmark-visao` (`--page`, `--golden`, `--config`, `--grid`, `--dry-run`, `--extrapolar`).
+- [x] Backend `claude-code` (`claude -p` headless, `--json-schema`) para rodar pela assinatura sem créditos de API.
+- [ ] Créditos de API no Console para o backend `api` (Batch a 50% só existe na API).
 - [x] Manifesto de 20 páginas douradas em `src/vision/golden.json`.
 - [ ] Recapturar as 19 páginas douradas sem imagem hi-res local (`ocr-hires --keep-images`).
 - [ ] `--dry-run` nas 20 páginas (tokens de entrada, grátis) e 1 página real por configuração.

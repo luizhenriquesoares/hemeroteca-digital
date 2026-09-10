@@ -1,0 +1,186 @@
+"""Leitura de página pelo Claude Code em modo headless (``claude -p``).
+
+Usa a sessão/assinatura do Claude Code em vez de créditos da API: os tiles são
+gravados em disco, o prompt pede que o modelo os leia com a ferramenta Read e
+devolva o JSON validado pelo schema (``--json-schema``). A saída ``--output-format
+json`` traz ``structured_output`` e ``usage``.
+
+O custo informado pelo Claude Code inclui o overhead do harness (system prompt
+e ferramentas, ~35k tokens em cache). Para extrapolar o custo de produção via
+API, o resultado também traz uma estimativa "API equivalente": tokens dos tiles
+pela fórmula de pixels + prompt, mais os tokens de saída reais.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import subprocess
+import time
+from pathlib import Path
+from typing import Any
+
+from src.config import DATA_DIR
+from src.vision.reader import (
+    MODE_INSTRUCTIONS,
+    MODES,
+    SYSTEM_PROMPT,
+    ReadConfig,
+    ReadResult,
+    _base_result,
+    estimate_cost,
+)
+from src.vision.schema import PageExtraction
+from src.vision.tiles import Tile, make_tiles
+
+logger = logging.getLogger(__name__)
+
+CLAUDE_CODE_MODEL_ALIAS = {
+    "claude-opus-5": "opus",
+    "claude-sonnet-5": "sonnet",
+    "claude-haiku-4-5": "haiku",
+}
+PROMPT_TOKENS_ESTIMATE = 1_500  # system prompt + instruções + listagem dos tiles
+DEFAULT_TIMEOUT_S = 1_500
+TILES_DIR = DATA_DIR / "benchmarks" / "visao" / "_tiles"
+
+
+def write_tiles(tiles: list[Tile], page_id: str, work_dir: Path | None = None) -> list[Path]:
+    """Grava os tiles como JPEG para o Claude Code ler pelo caminho."""
+    out_dir = (work_dir or TILES_DIR) / page_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for tile in tiles:
+        path = out_dir / f"tile_{tile.index:02d}.jpg"
+        path.write_bytes(tile.jpeg)
+        paths.append(path)
+    return paths
+
+
+def build_prompt(tiles: list[Tile], tile_paths: list[Path], config: ReadConfig) -> str:
+    if config.mode not in MODES:
+        raise ValueError(f"Modo inválido: {config.mode!r} (use um de {MODES})")
+    cols = max(tile.col for tile in tiles) + 1
+    rows = max(tile.row for tile in tiles) + 1
+    listing = "\n".join(
+        f"- Recorte {tile.index} (coluna {tile.col + 1}/{cols}, faixa {tile.row + 1}/{rows}): {path}"
+        for tile, path in zip(tiles, tile_paths)
+    )
+    return (
+        f"{SYSTEM_PROMPT}\n\n"
+        f"A página está dividida em {len(tiles)} recortes: grade de {cols} colunas por {rows} faixas, "
+        f"numerados de 0 a {len(tiles) - 1}, da esquerda para a direita e de cima para baixo. "
+        "Leia TODOS os arquivos abaixo com a ferramenta Read, na ordem, antes de responder:\n"
+        f"{listing}\n\n"
+        f"{MODE_INSTRUCTIONS[config.mode]}\n\n"
+        "Não escreva nada além do JSON final."
+    )
+
+
+def build_command(prompt: str, config: ReadConfig, schema: dict[str, Any], max_turns: int = 60) -> list[str]:
+    alias = CLAUDE_CODE_MODEL_ALIAS.get(config.model, config.model)
+    return [
+        "claude",
+        "-p",
+        prompt,
+        "--model",
+        alias,
+        "--output-format",
+        "json",
+        "--allowedTools",
+        "Read",
+        "--max-turns",
+        str(max_turns),
+        "--json-schema",
+        json.dumps(schema, ensure_ascii=False),
+    ]
+
+
+def run_claude_code(cmd: list[str], timeout: int = DEFAULT_TIMEOUT_S) -> subprocess.CompletedProcess:
+    env = {key: value for key, value in os.environ.items() if key != "CLAUDECODE"}  # permite rodar aninhado
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, check=False)
+
+
+def _usage_from_payload(payload: dict[str, Any]) -> dict[str, int]:
+    usage = payload.get("usage") or {}
+    keys = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+    return {key: int(usage.get(key) or 0) for key in keys}
+
+
+def read_page_claude_code(
+    image_path: Path | str,
+    config: ReadConfig,
+    *,
+    tiles: list[Tile] | None = None,
+    work_dir: Path | None = None,
+    runner=run_claude_code,
+    timeout: int = DEFAULT_TIMEOUT_S,
+) -> ReadResult:
+    image_path = Path(image_path)
+    tiles = tiles if tiles is not None else make_tiles(image_path, grid=config.grid)
+    result = _base_result(image_path.stem, config, tiles)
+    result.backend = "claude-code"
+
+    tile_paths = write_tiles(tiles, image_path.stem, work_dir)
+    prompt = build_prompt(tiles, tile_paths, config)
+    cmd = build_command(prompt, config, PageExtraction.model_json_schema())
+
+    started = time.perf_counter()
+    try:
+        proc = runner(cmd, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        result.elapsed_s = round(time.perf_counter() - started, 2)
+        result.error = f"timeout ({timeout}s)"
+        return result
+    except Exception as exc:  # noqa: BLE001
+        result.elapsed_s = round(time.perf_counter() - started, 2)
+        result.error = f"{type(exc).__name__}: {exc}"
+        return result
+    result.elapsed_s = round(time.perf_counter() - started, 2)
+
+    stdout = (proc.stdout or "").strip()
+    if proc.returncode != 0 or not stdout:
+        result.error = (proc.stderr or stdout or f"returncode={proc.returncode}").strip()[:500]
+        logger.error("Claude Code falhou (%s, %s): %s", config.name, image_path.name, result.error)
+        return result
+
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        result.error = f"saída não é JSON: {exc}"
+        return result
+
+    result.usage = _usage_from_payload(payload)
+    result.stop_reason = payload.get("stop_reason") or payload.get("subtype")
+    result.cost_usd_reported = payload.get("total_cost_usd")
+
+    # Custo "API equivalente": tiles pela fórmula de pixels + prompt, saída real.
+    api_usage = {
+        "input_tokens": result.tiles_tokens_estimate + PROMPT_TOKENS_ESTIMATE,
+        "output_tokens": result.usage.get("output_tokens", 0),
+    }
+    result.cost_usd = round(estimate_cost(api_usage, config.model), 6)
+    result.cost_usd_batch = round(estimate_cost(api_usage, config.model, batch=True), 6)
+
+    if payload.get("is_error"):
+        result.error = str(payload.get("result") or payload.get("subtype") or "erro")[:500]
+        return result
+
+    structured = payload.get("structured_output")
+    if structured is None:
+        raw = payload.get("result")
+        if isinstance(raw, str):
+            try:
+                structured = json.loads(raw)
+            except json.JSONDecodeError:
+                structured = None
+    if structured is None:
+        result.error = f"sem structured_output (subtype={payload.get('subtype')})"
+        return result
+
+    try:
+        result.extraction = PageExtraction.model_validate(structured).model_dump(mode="json")
+    except Exception as exc:  # noqa: BLE001
+        result.error = f"JSON fora do schema: {str(exc)[:300]}"
+    return result

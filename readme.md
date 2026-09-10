@@ -112,7 +112,12 @@ python3 main.py benchmark-visao --page 029033_01_00001 --config sonnet-full --co
 
 # Todas as configurações nas páginas douradas, extrapolando para 150k páginas
 python3 main.py benchmark-visao --golden --extrapolar 150000
+
+# Pela assinatura do Claude Code (claude -p headless), sem créditos de API
+python3 main.py benchmark-visao --page 029033_01_00001 --config sonnet-full --backend claude-code
 ```
+Com `--backend claude-code` o custo por página é uma estimativa "API equivalente" (tiles pela fórmula de pixels + saída real);
+o custo informado pelo Claude Code inclui o overhead do harness e fica em `cost_usd_reported`.
 Configurações: `opus-full`, `opus-structure`, `sonnet-full`, `sonnet-structure`, `haiku-full`, `haiku-structure`.
 Páginas douradas em `src/vision/golden.json`; as sem imagem local precisam de `ocr-hires --keep-images`.
 Resultados em `data/benchmarks/visao/<timestamp>/` (`summary.md`, `summary.json`, um JSON por página x config).

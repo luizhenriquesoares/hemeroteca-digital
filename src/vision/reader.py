@@ -37,6 +37,9 @@ BATCH_MULT = 0.5
 MODES = ("full", "structure")
 
 
+BACKENDS = ("api", "claude-code")
+
+
 @dataclass(frozen=True)
 class ReadConfig:
     name: str
@@ -45,9 +48,15 @@ class ReadConfig:
     grid: tuple[int, int] = DEFAULT_GRID
     effort: str | None = "medium"  # None para modelos sem `output_config.effort` (Haiku)
     max_tokens: int = 24000
+    backend: str = "api"  # "api" (SDK, créditos) ou "claude-code" (CLI headless, assinatura)
 
     def with_grid(self, grid: tuple[int, int]) -> "ReadConfig":
-        return ReadConfig(self.name, self.model, self.mode, grid, self.effort, self.max_tokens)
+        return ReadConfig(self.name, self.model, self.mode, grid, self.effort, self.max_tokens, self.backend)
+
+    def with_backend(self, backend: str) -> "ReadConfig":
+        if backend not in BACKENDS:
+            raise ValueError(f"Backend inválido: {backend!r} (use um de {BACKENDS})")
+        return ReadConfig(self.name, self.model, self.mode, self.grid, self.effort, self.max_tokens, backend)
 
 
 CONFIGS: dict[str, ReadConfig] = {
@@ -108,6 +117,8 @@ class ReadResult:
     stop_reason: str | None = None
     extraction: dict[str, Any] | None = None
     error: str | None = None
+    backend: str = "api"
+    cost_usd_reported: float | None = None  # custo informado pelo Claude Code (inclui overhead do harness)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -256,6 +267,11 @@ def read_page(
 ) -> ReadResult:
     """Lê uma página com a configuração dada e devolve resultado + custo."""
     image_path = Path(image_path)
+    if config.backend == "claude-code":
+        from src.vision.claude_code_reader import read_page_claude_code
+
+        return read_page_claude_code(image_path, config, tiles=tiles)
+
     client = client or get_client()
     tiles = tiles if tiles is not None else make_tiles(image_path, grid=config.grid)
     result = _base_result(image_path.stem, config, tiles)

@@ -100,14 +100,22 @@ def quality_metrics(extraction: dict[str, Any] | None, reference_text: str | Non
     return metrics
 
 
-def select_configs(names: Iterable[str] | None, grid: tuple[int, int] | None = None) -> list[ReadConfig]:
+def select_configs(
+    names: Iterable[str] | None,
+    grid: tuple[int, int] | None = None,
+    backend: str | None = None,
+) -> list[ReadConfig]:
     chosen = list(names) if names else list(CONFIGS)
     configs = []
     for name in chosen:
         if name not in CONFIGS:
             raise ValueError(f"Configuração desconhecida: {name!r}. Opções: {', '.join(CONFIGS)}")
         config = CONFIGS[name]
-        configs.append(config.with_grid(grid) if grid else config)
+        if grid:
+            config = config.with_grid(grid)
+        if backend:
+            config = config.with_backend(backend)
+        configs.append(config)
     return configs
 
 
@@ -138,6 +146,7 @@ def aggregate(results: list[dict[str, Any]], extrapolate_pages: int) -> dict[str
             "tiles_tokens_estimate": _mean([item["tiles_tokens_estimate"] for item in items]),
             "cost_usd_page": cost,
             "cost_usd_page_batch": cost_batch,
+            "cost_usd_page_reported": _mean([item.get("cost_usd_reported") for item in ok]),
             "cost_usd_total": round(cost * extrapolate_pages, 2) if cost is not None else None,
             "cost_usd_total_batch": round(cost_batch * extrapolate_pages, 2) if cost_batch is not None else None,
             "elapsed_s": _mean([item["elapsed_s"] for item in ok]),
@@ -193,6 +202,7 @@ def run_benchmark(
     config_names: Iterable[str] | None = None,
     *,
     grid: tuple[int, int] | None = None,
+    backend: str | None = None,
     out_dir: Path | None = None,
     dry_run: bool = False,
     extrapolate_pages: int = DEFAULT_EXTRAPOLATION_PAGES,
@@ -201,7 +211,7 @@ def run_benchmark(
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Executa (ou só estima, em dry-run) todas as combinações e grava os artefatos."""
-    configs = select_configs(config_names, grid)
+    configs = select_configs(config_names, grid, backend)
     out_dir = out_dir or (BENCHMARK_DIR / datetime.now().strftime("%Y%m%d_%H%M%S"))
     out_dir.mkdir(parents=True, exist_ok=True)
     say = progress or (lambda _msg: None)
@@ -278,6 +288,7 @@ def run_benchmark(
         "pages": [item["id"] for item in available],
         "missing_images": missing,
         "configs": [config.name for config in configs],
+        "backend": backend or "api",
         "by_config": aggregate(results, extrapolate_pages),
         "results": results,
     }
