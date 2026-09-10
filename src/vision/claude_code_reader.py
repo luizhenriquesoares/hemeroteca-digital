@@ -78,9 +78,47 @@ def build_prompt(tiles: list[Tile], tile_paths: list[Path], config: ReadConfig) 
     )
 
 
+def inline_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
+    """Substitui ``$ref`` por suas definições: o ``--json-schema`` do Claude Code com ``$defs``
+    levou o modelo a devolver os nomes das definições como chaves em vez do documento."""
+    defs = schema.get("$defs") or schema.get("definitions") or {}
+
+    def resolve(node: Any) -> Any:
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if isinstance(ref, str) and ref.startswith("#/"):
+                name = ref.split("/")[-1]
+                target = defs.get(name)
+                if target is None:
+                    raise ValueError(f"$ref não resolvido no schema: {ref}")
+                merged = {key: value for key, value in node.items() if key != "$ref"}
+                merged.update(resolve(target))
+                return merged
+            return {key: resolve(value) for key, value in node.items() if key not in ("$defs", "definitions")}
+        if isinstance(node, list):
+            return [resolve(item) for item in node]
+        return node
+
+    return resolve(schema)
+
+
+def unwrap_structured(structured: Any) -> Any:
+    """Desfaz embrulhos vistos na prática: ``{"response": "<json>"}`` ou string JSON."""
+    if isinstance(structured, str):
+        try:
+            return unwrap_structured(json.loads(structured))
+        except json.JSONDecodeError:
+            return None
+    if isinstance(structured, dict) and "segments" not in structured and len(structured) == 1:
+        (inner,) = structured.values()
+        return unwrap_structured(inner)
+    return structured
+
+
 def build_command(prompt: str, config: ReadConfig, schema: dict[str, Any], max_turns: int = 60) -> list[str]:
     alias = CLAUDE_CODE_MODEL_ALIAS.get(config.model, config.model)
-    return [
+    schema = inline_schema_refs(schema)
+    cmd = [
         "claude",
         "-p",
         prompt,
@@ -95,6 +133,10 @@ def build_command(prompt: str, config: ReadConfig, schema: dict[str, Any], max_t
         "--json-schema",
         json.dumps(schema, ensure_ascii=False),
     ]
+    if config.effort:
+        # Sem isso o Sonnet gastou ~60k tokens de raciocínio numa página (11 min).
+        cmd += ["--effort", config.effort]
+    return cmd
 
 
 def run_claude_code(cmd: list[str], timeout: int = DEFAULT_TIMEOUT_S) -> subprocess.CompletedProcess:
@@ -193,20 +235,19 @@ def read_page_claude_code(
         result.error = str(payload.get("result") or payload.get("subtype") or "erro")[:500]
         return result
 
-    structured = payload.get("structured_output")
-    if structured is None:
-        raw = payload.get("result")
-        if isinstance(raw, str):
-            try:
-                structured = json.loads(raw)
-            except json.JSONDecodeError:
-                structured = None
-    if structured is None:
-        result.error = f"sem structured_output (subtype={payload.get('subtype')})"
+    candidates = [unwrap_structured(payload.get("structured_output")), unwrap_structured(payload.get("result"))]
+    candidates = [candidate for candidate in candidates if isinstance(candidate, dict) and "segments" in candidate]
+    if not candidates:
+        result.error = f"sem JSON com 'segments' na resposta (subtype={payload.get('subtype')})"
         return result
 
-    try:
-        result.extraction = PageExtraction.model_validate(structured).model_dump(mode="json")
-    except Exception as exc:  # noqa: BLE001
-        result.error = f"JSON fora do schema: {str(exc)[:300]}"
+    last_error = ""
+    for candidate in candidates:
+        try:
+            result.extraction = PageExtraction.model_validate(candidate).model_dump(mode="json")
+            result.error = None
+            return result
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)[:300]
+    result.error = f"JSON fora do schema: {last_error}"
     return result

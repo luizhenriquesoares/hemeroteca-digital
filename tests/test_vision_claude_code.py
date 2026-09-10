@@ -51,6 +51,9 @@ class ClaudeCodeReaderTests(unittest.TestCase):
         self.assertIn("opus", cmd)
         self.assertIn("--json-schema", cmd)
         self.assertIn("Read", cmd[cmd.index("--allowedTools") + 1])
+        self.assertEqual(cmd[cmd.index("--effort") + 1], "low")
+        self.assertNotIn("$defs", cmd[cmd.index("--json-schema") + 1])
+        self.assertNotIn("--effort", cc.build_command(prompt, CONFIGS["haiku-full"], {"type": "object"}))
 
     def test_read_page_parses_structured_output_and_costs(self):
         structured = {
@@ -121,6 +124,39 @@ class ClaudeCodeReaderTests(unittest.TestCase):
             "newspaper": None, "issue_date": None, "issue_number": None, "page_number": None,
             "columns": None, "segments": [], "illegible_notes": None,
         })
+
+    def test_inline_schema_refs_removes_defs(self):
+        from src.vision.schema import PageExtraction
+
+        schema = cc.inline_schema_refs(PageExtraction.model_json_schema())
+        dumped = json.dumps(schema)
+        self.assertNotIn("$ref", dumped)
+        self.assertNotIn("$defs", dumped)
+        segment_items = schema["properties"]["segments"]["items"]
+        self.assertIn("people", segment_items["properties"])
+        self.assertIn("enum", segment_items["properties"]["type"])
+
+    def test_unwrap_structured_handles_wrappers(self):
+        page = {"segments": [], "newspaper": "X"}
+        self.assertEqual(cc.unwrap_structured(page), page)
+        self.assertEqual(cc.unwrap_structured({"response": json.dumps(page)}), page)
+        self.assertEqual(cc.unwrap_structured(json.dumps(page)), page)
+        self.assertIsNone(cc.unwrap_structured("não é json"))
+
+    def test_read_page_recovers_wrapped_response(self):
+        page = {"newspaper": "Diario", "segments": [{"type": "edital", "text": "Edital"}]}
+        payload = json.loads(_payload({"PersonMention": "{}", "Segment": "{}"}))
+        payload["result"] = json.dumps({"response": json.dumps(page)})
+
+        def runner(cmd, timeout):
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "029033_01_00009.jpg"
+            _page().save(image)
+            result = cc.read_page_claude_code(image, CONFIGS["sonnet-full"].with_backend("claude-code"), work_dir=Path(tmp), runner=runner)
+        self.assertIsNone(result.error)
+        self.assertEqual(result.extraction["segments"][0]["text"], "Edital")
 
     def test_with_backend_validates(self):
         with self.assertRaises(ValueError):
