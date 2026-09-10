@@ -1,5 +1,20 @@
 # Status do Projeto
 
+## Atualização de 2026-09-09 (retomada)
+
+Parado de 12 de abril a 9 de setembro. Na retomada:
+
+- O trabalho não commitado de abril entrou em `7f7de98` (resume por ranges, stealth headless, link "Abrir folha na BN").
+- Nova direção em `PLANO.md`: pipeline visão-primeiro (Claude com saída estruturada) no lugar de Tesseract + correção + regex; recorte no século XIX; agente historiador; datasets abertos.
+- Roadmap novo em `tasks.md`; o roadmap de abril abaixo fica como histórico.
+- Base local: 12.068 páginas no SQLite, 331k entidades, 1,25M relações (quase todas coocorrência), ChromaDB 1,9 GB. Só `029033_01` capturado em massa (11.399 de 13.723 páginas; 1.534 falhas).
+- `src/vision` + `benchmark-visao` prontos; falta recapturar 19 das 20 páginas douradas com `--keep-images`.
+- Segredo de upload saiu do código (`HEMEROTECA_UPLOAD_SECRET`).
+
+---
+
+# Estado em abril de 2026 (histórico)
+
 ## Visão Geral
 
 Este projeto evoluiu de um pipeline de scraping + OCR + busca para uma base historiográfica mais confiável, com foco em:

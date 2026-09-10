@@ -518,5 +518,17 @@ Os Botelhos aparecem como grupo familiar ligado à administração provincial.
         self.assertEqual(payload["review"]["review_status"], "rejected")
 
 
+class UploadEndpointsTests(unittest.TestCase):
+    def test_upload_endpoints_disabled_without_secret(self):
+        with patch.object(api, "_UPLOAD_SECRET", None):
+            payload = asyncio.run(api.clear_upload(secret="qualquer"))
+        self.assertEqual(payload, {"error": "upload disabled"})
+
+    def test_upload_endpoints_reject_wrong_secret(self):
+        with patch.object(api, "_UPLOAD_SECRET", "segredo-certo"):
+            payload = asyncio.run(api.extract_upload(secret="errado"))
+        self.assertEqual(payload, {"error": "unauthorized"})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -102,6 +102,26 @@ python3 -m uvicorn src.web.api:app --host 0.0.0.0 --port 8000
 # Abrir http://localhost:8000
 ```
 
+### Leitura visão-primeiro (benchmark)
+```bash
+# Conta tokens de entrada das páginas douradas sem chamar o modelo (grátis)
+python3 main.py benchmark-visao --golden --dry-run
+
+# Uma página, duas configurações (gera custo de API)
+python3 main.py benchmark-visao --page 029033_01_00001 --config sonnet-full --config opus-structure
+
+# Todas as configurações nas páginas douradas, extrapolando para 150k páginas
+python3 main.py benchmark-visao --golden --extrapolar 150000
+```
+Configurações: `opus-full`, `opus-structure`, `sonnet-full`, `sonnet-structure`, `haiku-full`, `haiku-structure`.
+Páginas douradas em `src/vision/golden.json`; as sem imagem local precisam de `ocr-hires --keep-images`.
+Resultados em `data/benchmarks/visao/<timestamp>/` (`summary.md`, `summary.json`, um JSON por página x config).
+
+### Variáveis de ambiente
+- `ANTHROPIC_API_KEY`: leitura visão-primeiro e correção via API.
+- `OPENAI_API_KEY`: RAG e correção via OpenAI.
+- `HEMEROTECA_UPLOAD_SECRET`: habilita os endpoints temporários de upload (`/api/_upload_chunk`); sem valor ficam desligados.
+
 ## Resolução de captura
 
 | Nível | Resolução | Uso |
@@ -154,6 +174,12 @@ hemeroteca-digital/
 │   ├── benchmarks/
 │   │   ├── correcao.py            # Benchmark OpenAI mini/max vs Claude
 │   │   └── ocr.py                 # Benchmark OCR salvo vs OCR adaptativo
+│   ├── vision/
+│   │   ├── schema.py              # PageExtraction: segmentos, pessoas, relações
+│   │   ├── tiles.py               # Recorte da página em tiles legíveis
+│   │   ├── reader.py              # Leitura via Claude com saída estruturada
+│   │   ├── benchmark.py           # Benchmark configs x páginas (tokens, custo, qualidade)
+│   │   └── golden.json            # Páginas douradas do benchmark
 │   ├── config.py                  # Paths, URLs, constantes
 │   └── __init__.py                # Aliases lazy para compatibilidade legada
 ├── frontend/

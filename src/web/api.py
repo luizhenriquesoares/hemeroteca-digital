@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import json
 import logging
 import re
@@ -768,7 +769,16 @@ async def view_page(
 
 
 # --- Endpoints temporários de transferência de dados ---
-_UPLOAD_SECRET = "hemeroteca2026"
+_UPLOAD_SECRET = os.environ.get("HEMEROTECA_UPLOAD_SECRET") or None
+
+
+def _upload_gate(secret: str) -> dict | None:
+    """Endpoints de transferência ficam desligados sem HEMEROTECA_UPLOAD_SECRET no ambiente."""
+    if not _UPLOAD_SECRET:
+        return {"error": "upload disabled"}
+    if secret != _UPLOAD_SECRET:
+        return {"error": "unauthorized"}
+    return None
 
 @app.post("/api/_upload_chunk")
 async def upload_chunk(
@@ -776,8 +786,8 @@ async def upload_chunk(
     file: UploadFile = File(...),
     append: bool = Query(False, description="Append ao arquivo existente em vez de sobrescrever"),
 ):
-    if secret != _UPLOAD_SECRET:
-        return {"error": "unauthorized"}
+    if denied := _upload_gate(secret):
+        return denied
     upload_path = DATA_DIR / "_upload.tar.gz"
     upload_path.parent.mkdir(parents=True, exist_ok=True)
     mode = "ab" if append else "wb"
@@ -789,8 +799,8 @@ async def upload_chunk(
 
 @app.post("/api/_extract_upload")
 async def extract_upload(secret: str = Query(...)):
-    if secret != _UPLOAD_SECRET:
-        return {"error": "unauthorized"}
+    if denied := _upload_gate(secret):
+        return denied
     import subprocess
     upload_path = DATA_DIR / "_upload.tar.gz"
     if not upload_path.exists():
@@ -804,8 +814,8 @@ async def extract_upload(secret: str = Query(...)):
 
 @app.post("/api/_clear_upload")
 async def clear_upload(secret: str = Query(...)):
-    if secret != _UPLOAD_SECRET:
-        return {"error": "unauthorized"}
+    if denied := _upload_gate(secret):
+        return denied
     upload_path = DATA_DIR / "_upload.tar.gz"
     upload_path.unlink(missing_ok=True)
     return {"status": "cleared"}

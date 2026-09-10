@@ -1,152 +1,83 @@
-# Tasks
+# Tasks — Hemeroteca Digital PE (roadmap 2026-09)
 
-## Objetivo
-
-Transformar a base atual em uma plataforma historiográfica confiável, com:
-- OCR preservado quando já for melhor
-- metadados editoriais ricos
-- extração estruturada de entidades e relações com evidência
-- camada de consulta verificável
-- exportação futura para banco orientado a grafos
+Atualizado em 2026-09-09. Substitui o roadmap de abril (Fases 1-9); o que dele foi
+feito está listado no fim. Estratégia e decisões: `PLANO.md`. Estado: `PROJECT_STATUS.md`.
 
 ## Princípios
 
-- Nunca degradar o OCR existente sem ganho claro.
-- Toda relação histórica precisa apontar para evidência documental.
-- A interface deve sempre permitir verificar a página original do jornal.
-- O grafo deve ser alimentado por dados estruturados com proveniência, não por respostas livres do LLM.
-- Resolver primeiro qualidade e confiabilidade da base; só depois expandir visualização e grafo.
+- Toda relação histórica aponta para evidência: trecho literal + página + recorte da imagem.
+- O grafo é alimentado por dados estruturados com proveniência, nunca por texto livre do LLM.
+- Fato, inferência e hipótese são distinguidos e revisáveis.
+- Zero custo por padrão na consulta; o gasto com modelo fica na ingestão, em lote.
+- Recorte primeiro: século XIX (1825-1889), depois o resto.
 
-## Fase 1: Estabilização da Base
+## Fase 0 — Saneamento (setembro)
 
-- [x] Consolidar entrada web em uma única app.
-- [x] Corrigir dependências principais do projeto.
-- [x] Melhorar busca híbrida para nomes históricos e variantes nominais.
-- [x] Melhorar RAG para responder com evidências e fontes.
-- [x] Preservar metadados editoriais no pipeline hi-res.
-- [x] Criar camada estruturada inicial em SQLite.
-- [x] Expor endpoints básicos de entidade e página.
-- [x] Criar modo seguro para enriquecer apenas metadados sem refazer OCR.
+- [x] Commitar o trabalho pendente de abril (`7f7de98`).
+- [x] Segredo de upload sai do código (`HEMEROTECA_UPLOAD_SECRET`; endpoints desligados sem a variável).
+- [ ] Rebaixar ou remover as arestas `mentioned_with` do grafo exportado (hairball).
+- [ ] CI rodando `pytest tests/` (GitHub Actions).
+- [ ] Aposentar o hack de upload para o Railway; hospedagem definida na Fase 7.
 
-## Fase 2: Metadados e Reindexação
+## Fase 1 — Benchmark visão-primeiro (a decisão)
 
-- [ ] Rodar `enriquecer-metadados` nos acervos prioritários.
-- [ ] Recriar chunks dos acervos enriquecidos.
-- [ ] Reexecutar `estruturar` nos mesmos acervos.
-- [ ] Reindexar os acervos enriquecidos.
-- [ ] Validar manualmente se periódico, ano, edição e paginação aparecem corretamente na UI.
+- [x] Pacote `src/vision`: schema (`PageExtraction`), tiles, leitor Claude com saída estruturada, benchmark.
+- [x] Comando `benchmark-visao` (`--page`, `--golden`, `--config`, `--grid`, `--dry-run`, `--extrapolar`).
+- [x] Manifesto de 20 páginas douradas em `src/vision/golden.json`.
+- [ ] Recapturar as 19 páginas douradas sem imagem hi-res local (`ocr-hires --keep-images`).
+- [ ] `--dry-run` nas 20 páginas (tokens de entrada, grátis) e 1 página real por configuração.
+- [ ] Rodar as 20 páginas nas 6 configurações; revisar 5 à mão (colunas, pessoas, relações, ortografia).
+- [ ] Configuração híbrida: OCR barato dedicado + Claude só na extração sobre texto (`--config ocr+opus-text`).
+- [ ] Decidir a configuração de produção (qualidade por dólar) e registrar em `PLANO.md`.
+- [ ] Tiles por coluna detectada (projeção de pixels) se a grade uniforme cortar colunas.
 
-## Fase 3: Extração Estruturada
+## Fase 2 — Pipeline visão-primeiro em produção
 
-- [x] Melhorar extração de pessoas com menos falso positivo institucional.
-- [x] Adicionar extração de lugares.
-- [x] Adicionar extração de instituições.
-- [x] Adicionar extração de cargos e funções com mais precisão.
-- [x] Expandir relações:
-  - `spouse_of`
-  - `child_of`
-  - `parent_of`
-  - `holds_role`
-  - `member_of`
-  - `resident_of`
-  - `mentioned_with`
-- [ ] Guardar mais de uma evidência por relação.
-- [x] Melhorar normalização histórica de nomes e aliases.
+- [ ] Comando `ler-visao --bib X` usando Batch API (50%) e cache do system prompt.
+- [ ] Persistir `PageExtraction`: tabelas `segments`, `segment_people`, `segment_relations` com `page_id` e tiles.
+- [ ] Processar por EDIÇÃO (páginas da mesma data numa chamada) para itens que atravessam páginas.
+- [ ] Recorte (crop) do segmento a partir dos tiles como proveniência visual.
+- [ ] Reindexar a busca com chunk = segmento (não janela de 1000 caracteres).
+- [ ] Aposentar `ocr`, `corrigir`, `chunkar` e `estruturar` para acervos lidos por visão.
 
-## Fase 4: Resolução de Identidade
+## Fase 3 — Identidade e qualidade
 
-- [x] Separar claramente `menção` de `entidade consolidada`.
-- [x] Criar heurística de fusão por:
-  - nome normalizado
-  - cargo
-  - período
-  - local
-  - coocorrência com parentes e instituições
-- [x] Evitar fusão agressiva de homônimos.
-- [x] Marcar entidades ambíguas para revisão futura.
+- [ ] Blocking de candidatos (nome normalizado + período + lugar) e juiz LLM para fusão.
+- [ ] Rebaixar entidades sem segmento tipado; fila de revisão só com relação biográfica.
+- [ ] Múltiplas evidências por relação na persistência.
+- [ ] Amostragem de QA humana (20 páginas por mês) com erros registrados por tipo de segmento.
 
-## Fase 5: Qualidade e Confiabilidade
+## Fase 4 — Historiador de IA
 
-- [x] Melhorar benchmark de OCR com métricas historiográficas mais úteis.
-- [x] Melhorar benchmark comparando:
-  - OCR salvo
-  - OCR adaptativo
-  - texto corrigido
-- [x] Criar score operacional para detectar páginas ruins candidatas a reprocessamento.
-- [x] Ampliar testes de regressão para busca de pessoas e famílias.
-- [ ] Validar consultas reais com casos como:
-  - João Affonso Botelho
-  - Antonio Benedicto d'Araujo Pernambuco
-  - Botelho / Botelhos
+- [ ] Agente com ferramentas: busca estruturada (SQL), busca semântica, abrir folha e recorte, comparar entidades.
+- [ ] Citações com localização (API de citações) e link para a folha na BN.
+- [ ] Dossiê exportável (Markdown/PDF) com todas as provas.
+- [ ] Substituir o RAG atual pelo agente na UI.
 
-## Fase 6: UI Historiográfica
+## Fase 5 — Verticais e dados abertos
 
-- [ ] Melhorar ficha de pessoa com:
-  - nomes variantes
-  - menções por periódico
-  - linha do tempo simples
-  - relações agrupadas
-  - evidências clicáveis
-- [ ] Exibir melhor a página do jornal e a imagem correspondente.
-- [ ] Adicionar navegação entre entidade, evidência e página.
-- [ ] Mostrar claramente status da relação:
-  - hipótese
-  - provável
-  - confirmado
-  - rejeitado
+- [ ] Dataset "Anúncios de fuga de escravizados, Pernambuco 1825-1888" (CSV e JSON, CC-BY, DOI).
+- [ ] Dataset "Movimento do porto do Recife" (embarcações, procedências, passageiros).
+- [ ] Dataset "Nomeações e cargos da província".
+- [ ] API pública de leitura e página `/dados`.
+- [ ] Contato com Fundaj, UFPE (LAHPE) e APEJE; pedir acesso em lote à BN.
 
-## Fase 7: Revisão Humana Leve
+## Fase 6 — Captura
 
-- [ ] Criar status de revisão para relações sensíveis.
-- [ ] Permitir confirmar ou rejeitar relações familiares.
-- [ ] Permitir marcar fusões erradas de identidade.
-- [ ] Registrar revisão sem destruir a evidência original.
+- [ ] Testar download direto da imagem do DocReader com cookies de sessão resolvida, sem dirigir o Chrome por página.
+- [ ] Se falhar: Safari com AppleScript (provado noutro projeto) ou Chrome visível em IP residencial.
+- [ ] Recapturar `029033_01` (1.534 falhas e cauda 12.482-13.723), depois `029033_02` a `07` (1840-1899).
+- [ ] Guardar as imagens hi-res após a leitura (disco ou S3 barato); hoje o pipeline apaga.
 
-## Fase 8: Exportação para Grafo
+## Fase 7 — Infra e frontend
 
-- [ ] Criar `src/graph_store.py`.
-- [ ] Definir schema inicial do grafo:
-  - `Person`
-  - `Publication`
-  - `Issue`
-  - `Page`
-  - `Institution`
-  - `Place`
-  - `Mention`
-- [ ] Definir arestas com proveniência:
-  - `MENTIONED_IN`
-  - `SPOUSE_OF`
-  - `CHILD_OF`
-  - `PARENT_OF`
-  - `HOLDS_ROLE`
-  - `MEMBER_OF`
-  - `RESIDENT_OF`
-- [ ] Exportar SQLite -> grafo de forma idempotente.
-- [ ] Guardar em cada aresta:
-  - `confidence`
-  - `status`
-  - `quote`
-  - `source_page_id`
-  - `source_chunk_id`
+- [ ] Servidor próprio de 8-16 GB (Hetzner ou Lightsail grande); Postgres com pgvector ou SQLite com sqlite-vec; sem Railway.
+- [ ] Quebrar `frontend/index.html` (5k linhas) em módulos; página `/dados`.
+- [ ] Açores: retomar o cruzamento genealógico depois da Fase 3.
 
-## Fase 9: Consulta Baseada em Grafo
+## Feito em abril de 2026 (referência)
 
-- [ ] Criar comando `exportar-grafo`.
-- [ ] Criar consulta híbrida:
-  - busca documental
-  - busca estrutural
-  - busca no grafo
-- [ ] Responder perguntas sobre pessoas com:
-  - perfil
-  - relações
-  - periódicos
-  - evidências
-  - link da página original
-
-## Próximos Passos Recomendados
-
-1. Rodar `enriquecer-metadados` nos acervos prioritários.
-2. Reexecutar `chunkar`, `estruturar` e `indexar` nesses acervos.
-3. Melhorar a extração de entidades e relações.
-4. Consolidar a camada SQLite.
-5. Só então implementar a exportação para banco de grafos.
+Pipeline Tesseract, correção por LLM, chunks e ChromaDB; camada estruturada em SQLite com
+identidade e revisão humana (endpoints); grafo (`graph_store`, `exportar-grafo`); descoberta na
+home (personagem do dia, trilhas, sobrenomes, grafo interativo); landing `/sobre`; biografias
+automáticas; módulo Açores com uma paróquia transcrita por gpt-4o.
