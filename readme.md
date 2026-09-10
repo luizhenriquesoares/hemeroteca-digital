@@ -118,7 +118,7 @@ Páginas douradas em `src/vision/golden.json`; as sem imagem local precisam de `
 Resultados em `data/benchmarks/visao/<timestamp>/` (`summary.md`, `summary.json`, um JSON por página x config).
 
 ### Variáveis de ambiente
-- `ANTHROPIC_API_KEY`: leitura visão-primeiro e correção via API.
+- `ANTHROPIC_API_KEY`: leitura visão-primeiro e correção via API. Sem ela, o leitor usa o perfil de `ant auth login` (CLI da Anthropic: `brew install anthropics/tap/ant`). Nos dois casos a organização precisa ter créditos de API no Console.
 - `OPENAI_API_KEY`: RAG e correção via OpenAI.
 - `HEMEROTECA_UPLOAD_SECRET`: habilita os endpoints temporários de upload (`/api/_upload_chunk`); sem valor ficam desligados.
 

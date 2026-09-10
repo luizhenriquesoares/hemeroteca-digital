@@ -114,6 +114,34 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(page.model_dump(mode="json")["segments"][0]["type"], "fuga_escravizado")
 
 
+class ClientAuthTests(unittest.TestCase):
+    def test_get_client_prefers_env_api_key(self):
+        from src.vision import reader
+
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-teste"}, clear=False), \
+             patch.object(reader, "_ant_access_token", side_effect=AssertionError("não deveria consultar o ant")):
+            client = reader.get_client()
+        self.assertEqual(client.api_key, "sk-ant-teste")
+
+    def test_get_client_falls_back_to_ant_profile(self):
+        from src.vision import reader
+
+        env = {k: v for k, v in __import__("os").environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+        with patch.dict("os.environ", env, clear=True), \
+             patch.object(reader, "_ant_access_token", return_value="sk-ant-oat01-abc"):
+            client = reader.get_client()
+        self.assertEqual(client.auth_token, "sk-ant-oat01-abc")
+        self.assertEqual(client.default_headers.get("anthropic-beta"), reader.OAUTH_BETA_HEADER)
+
+    def test_get_client_raises_without_any_credential(self):
+        from src.vision import reader
+
+        env = {k: v for k, v in __import__("os").environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+        with patch.dict("os.environ", env, clear=True), patch.object(reader, "_ant_access_token", return_value=None):
+            with self.assertRaises(RuntimeError):
+                reader.get_client()
+
+
 class BenchmarkTests(unittest.TestCase):
     def test_resolve_page_id_without_image(self):
         with tempfile.TemporaryDirectory() as tmp:

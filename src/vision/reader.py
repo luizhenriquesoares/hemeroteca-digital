@@ -115,11 +115,51 @@ class ReadResult:
         return payload
 
 
+OAUTH_BETA_HEADER = "oauth-2025-04-20"
+
+
+def _ant_access_token() -> str | None:
+    """Token do perfil criado por `ant auth login` (CLI da Anthropic), se houver."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("ant"):
+        return None
+    try:
+        proc = subprocess.run(
+            ["ant", "auth", "print-credentials", "--access-token"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    token = proc.stdout.strip()
+    return token if proc.returncode == 0 and token.startswith("sk-ant-oat") else None
+
+
 def get_client(timeout: float = 900.0, max_retries: int = 2):
-    """Cliente Anthropic. Timeout explícito libera max_tokens grande sem streaming."""
+    """Cliente Anthropic. Timeout explícito libera max_tokens grande sem streaming.
+
+    Credencial: ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN do ambiente (o SDK resolve);
+    sem elas, cai no perfil do `ant auth login` (token OAuth + cabeçalho beta).
+    """
+    import os
+
     import anthropic
 
-    return anthropic.Anthropic(timeout=timeout, max_retries=max_retries)
+    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+        return anthropic.Anthropic(timeout=timeout, max_retries=max_retries)
+
+    token = _ant_access_token()
+    if token:
+        return anthropic.Anthropic(
+            auth_token=token,
+            default_headers={"anthropic-beta": OAUTH_BETA_HEADER},
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+    raise RuntimeError(
+        "Sem credencial Anthropic: defina ANTHROPIC_API_KEY em .env ou faça `ant auth login`."
+    )
 
 
 def build_user_content(tiles: list[Tile], config: ReadConfig) -> list[dict[str, Any]]:
