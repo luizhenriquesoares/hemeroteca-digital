@@ -268,9 +268,12 @@ def run_benchmark(
                 result = read_fn(page["image"], config, client=client, tiles=tiles)
                 item = result.to_dict()
                 item["quality"] = quality_metrics(result.extraction, reference_text)
+                thinking = result.usage.get("thinking_tokens", 0)
                 status = f"ERRO {result.error}" if result.error else (
-                    f"in={result.usage.get('input_tokens', 0):,} out={result.usage.get('output_tokens', 0):,} "
-                    f"US${result.cost_usd:.4f} {result.elapsed_s:.0f}s"
+                    f"in={result.usage.get('input_tokens', 0):,} out={result.usage.get('output_tokens', 0):,}"
+                    + (f" (think={thinking:,})" if thinking else "")
+                    + f" US${result.cost_usd:.4f} {result.elapsed_s:.0f}s"
+                    + f" segs={len((result.extraction or {}).get('segments', []))}"
                 )
                 say(f"{page['id']} x {config.name}: {status}")
 

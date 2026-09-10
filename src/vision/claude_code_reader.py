@@ -105,7 +105,26 @@ def run_claude_code(cmd: list[str], timeout: int = DEFAULT_TIMEOUT_S) -> subproc
 def _usage_from_payload(payload: dict[str, Any]) -> dict[str, int]:
     usage = payload.get("usage") or {}
     keys = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
-    return {key: int(usage.get(key) or 0) for key in keys}
+    parsed = {key: int(usage.get(key) or 0) for key in keys}
+    details = usage.get("output_tokens_details") or {}
+    parsed["thinking_tokens"] = int(details.get("thinking_tokens") or 0)
+    return parsed
+
+
+def _details_from_payload(payload: dict[str, Any], raw_limit: int = 6000) -> dict[str, Any]:
+    """Diagnóstico do run do Claude Code (turnos, subtype, negações, trecho da resposta)."""
+    raw = payload.get("result")
+    return {
+        "subtype": payload.get("subtype"),
+        "num_turns": payload.get("num_turns"),
+        "terminal_reason": payload.get("terminal_reason"),
+        "permission_denials": payload.get("permission_denials") or [],
+        "api_error_status": payload.get("api_error_status"),
+        "session_id": payload.get("session_id"),
+        "result_text": raw[:raw_limit] if isinstance(raw, str) else raw,
+        "result_text_len": len(raw) if isinstance(raw, str) else None,
+        "has_structured_output": payload.get("structured_output") is not None,
+    }
 
 
 def read_page_claude_code(
@@ -114,10 +133,11 @@ def read_page_claude_code(
     *,
     tiles: list[Tile] | None = None,
     work_dir: Path | None = None,
-    runner=run_claude_code,
+    runner=None,
     timeout: int = DEFAULT_TIMEOUT_S,
 ) -> ReadResult:
     image_path = Path(image_path)
+    runner = runner or run_claude_code  # resolvido na chamada, para testes trocarem o executor
     tiles = tiles if tiles is not None else make_tiles(image_path, grid=config.grid)
     result = _base_result(image_path.stem, config, tiles)
     result.backend = "claude-code"
@@ -151,17 +171,23 @@ def read_page_claude_code(
         result.error = f"saída não é JSON: {exc}"
         return result
 
-    result.usage = _usage_from_payload(payload)
-    result.stop_reason = payload.get("stop_reason") or payload.get("subtype")
+    cli_usage = _usage_from_payload(payload)
+    result.stop_reason = payload.get("subtype") or payload.get("stop_reason")
     result.cost_usd_reported = payload.get("total_cost_usd")
+    result.details = _details_from_payload(payload)
 
-    # Custo "API equivalente": tiles pela fórmula de pixels + prompt, saída real.
-    api_usage = {
+    # Custo "API equivalente": tiles pela fórmula de pixels + prompt na entrada, saída real do CLI.
+    # `usage` fica nesse formato (comparável ao backend api); o bruto do CLI vai em `usage_cli`.
+    result.usage = {
         "input_tokens": result.tiles_tokens_estimate + PROMPT_TOKENS_ESTIMATE,
-        "output_tokens": result.usage.get("output_tokens", 0),
+        "output_tokens": cli_usage.get("output_tokens", 0),
+        "thinking_tokens": cli_usage.get("thinking_tokens", 0),
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
     }
-    result.cost_usd = round(estimate_cost(api_usage, config.model), 6)
-    result.cost_usd_batch = round(estimate_cost(api_usage, config.model, batch=True), 6)
+    result.usage_cli = cli_usage
+    result.cost_usd = round(estimate_cost(result.usage, config.model), 6)
+    result.cost_usd_batch = round(estimate_cost(result.usage, config.model, batch=True), 6)
 
     if payload.get("is_error"):
         result.error = str(payload.get("result") or payload.get("subtype") or "erro")[:500]

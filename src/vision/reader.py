@@ -119,6 +119,8 @@ class ReadResult:
     error: str | None = None
     backend: str = "api"
     cost_usd_reported: float | None = None  # custo informado pelo Claude Code (inclui overhead do harness)
+    usage_cli: dict[str, int] = field(default_factory=dict)  # uso bruto do Claude Code, quando backend=claude-code
+    details: dict[str, Any] = field(default_factory=dict)  # diagnóstico do run (turnos, subtype, trecho da resposta)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)

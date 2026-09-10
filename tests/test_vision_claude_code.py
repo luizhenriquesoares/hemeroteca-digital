@@ -75,7 +75,11 @@ class ClaudeCodeReaderTests(unittest.TestCase):
         self.assertEqual(result.backend, "claude-code")
         self.assertEqual(result.extraction["segments"][0]["people"][0]["name"], "Joao Botelho")
         self.assertEqual(result.usage["output_tokens"], 8000)
+        self.assertEqual(result.usage["input_tokens"], result.tiles_tokens_estimate + cc.PROMPT_TOKENS_ESTIMATE)
+        self.assertEqual(result.usage_cli["cache_read_input_tokens"], 33000)
         self.assertEqual(result.cost_usd_reported, 0.42)
+        self.assertEqual(result.details["subtype"], "success")
+        self.assertTrue(result.details["has_structured_output"])
         expected = (result.tiles_tokens_estimate + cc.PROMPT_TOKENS_ESTIMATE) * 2 / 1e6 + 8000 * 10 / 1e6
         self.assertAlmostEqual(result.cost_usd, round(expected, 6))
         self.assertAlmostEqual(result.cost_usd_batch, round(expected / 2, 6))
