@@ -30,6 +30,25 @@ def get_total_pages(bib: str) -> int:
     return 0
 
 
+def get_acervo_nome(bib: str) -> str:
+    """Título do periódico a partir do cache de acervos.
+
+    Sem isso o metadado da página fica com `jornal: "Acervo 029033_01"` e o
+    título real se perde — o que quebra a ficha historiográfica e a busca por
+    periódico.
+    """
+    cache_file = CACHE_DIR / "acervos_pe.json"
+    if cache_file.exists():
+        try:
+            with open(cache_file, encoding="utf-8") as fh:
+                for acervo in json.load(fh):
+                    if acervo.get("bib") == bib and acervo.get("nome"):
+                        return acervo["nome"]
+        except Exception:
+            pass
+    return f"Acervo {bib}"
+
+
 def _build_full_ranges(total_pages: int, workers: int, max_pages: int = 0) -> list[tuple[int, int]]:
     target_total = min(total_pages, max_pages) if max_pages else total_pages
     if target_total <= 0:
@@ -278,7 +297,7 @@ def processar_todos_hires(
     create_driver_fn,
 ):
     if bib:
-        acervos = [{"bib": bib, "nome": f"Acervo {bib}"}]
+        acervos = [{"bib": bib, "nome": get_acervo_nome(bib)}]
     else:
         cache_file = CACHE_DIR / "acervos_pe.json"
         if not cache_file.exists():

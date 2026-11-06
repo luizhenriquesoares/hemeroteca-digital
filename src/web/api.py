@@ -195,7 +195,7 @@ def _cache_set(key: tuple, value: object):
 @app.get("/", response_class=HTMLResponse)
 async def index():
     """Serve o frontend (sempre fresco — sem cache do browser)."""
-    frontend_path = Path(__file__).parent.parent.parent / "frontend" / "index.html"
+    frontend_path = Path(__file__).parent.parent.parent / "frontend" / "workspace.html"
     return HTMLResponse(
         content=frontend_path.read_text(encoding="utf-8"),
         headers={
@@ -204,6 +204,18 @@ async def index():
             "Expires": "0",
         },
     )
+
+
+@app.get("/avancado", response_class=HTMLResponse)
+async def advanced_workspace():
+    path = Path(__file__).parent.parent.parent / "frontend" / "index.html"
+    return HTMLResponse(content=path.read_text(encoding="utf-8"), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/graph/relation-evidence")
+async def graph_relation_evidence(relation_id: int = Query(..., ge=1)):
+    from src.structured.graph_store import get_relation_evidence
+    return await run_in_threadpool(get_relation_evidence, relation_id)
 
 
 @app.get("/sobre", response_class=HTMLResponse)
@@ -228,22 +240,28 @@ async def buscar(
     q: str = Query(..., description="Texto de busca"),
     n: int = Query(10, ge=1, le=50, description="Número de resultados"),
     bib: str = Query(None, description="Filtrar por acervo"),
-    modo: str = Query("semantica", description="Modo: semantica ou textual"),
+    modo: str = Query("semantica", description="Modo: semantica, textual (aproximada) ou literal (indexada)"),
     score_min: float = Query(0.45, ge=0, le=1, description="Score mínimo de relevância"),
     year_from: int = Query(None, ge=1800, le=2100, description="Ano inicial opcional"),
     year_to: int = Query(None, ge=1800, le=2100, description="Ano final opcional"),
 ):
     """Busca nos jornais (semântica ou textual)."""
 
-    if modo == "textual":
-        resultados = buscar_textual_historica(
-            q,
+    if modo == "literal":
+        from src.processing.text_index import buscar_textual_indexada
+        resultados = await run_in_threadpool(
+            buscar_textual_indexada, q, n_results=n, filtro_bib=bib,
+            year_from=year_from, year_to=year_to,
+        )
+    elif modo == "textual":
+        resultados = await run_in_threadpool(
+            buscar_textual_historica, q,
             n_results=max(n * 3, 30) if (year_from or year_to) else n,
             filtro_bib=bib,
         )
     else:
         candidate_n = min(max(n * 6, 50), 150) if (year_from or year_to) else min(n * 3, 50)
-        resultados = buscar_hibrida(q, n_results=candidate_n, filtro_bib=bib)
+        resultados = await run_in_threadpool(buscar_hibrida, q, n_results=candidate_n, filtro_bib=bib)
 
     resultados = _filter_results_by_year(resultados, year_from=year_from, year_to=year_to)
     filtrados = [r for r in resultados if r["score"] >= score_min]
@@ -584,7 +602,8 @@ async def discovery_layered_graph(
         focus_entity_id=focus_id,
         focus_depth=depth,
     )
-    return _cache_set(cache_key, data)
+    from src.structured.graph_store import group_parallel_edges
+    return _cache_set(cache_key, group_parallel_edges(data))
 
 
 @app.get("/api/graph/edge-evidence")
@@ -819,3 +838,7 @@ async def clear_upload(secret: str = Query(...)):
     upload_path = DATA_DIR / "_upload.tar.gz"
     upload_path.unlink(missing_ok=True)
     return {"status": "cleared"}
+
+# Ferramentas documentais sem chamadas a modelos externos.
+from src.web.research_lab import router as research_lab_router
+app.include_router(research_lab_router)

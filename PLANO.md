@@ -85,6 +85,40 @@ nomes das definições como chaves), o Sonnet sem `--effort` gastou 60k tokens d
 página, e o custo informado pelo Claude Code inclui ~33k tokens de harness em cache, por isso a
 conversão para preço de API.
 
+## Recortes por layout — implementação experimental (2026-09-10)
+
+`--tiling layout` adiciona detecção de espaços/linhas em cópia reduzida, divisão por
+regiões e resolução orientada pela altura estimada dos caracteres. Os pixels do
+original são preservados; regiões sem separação clara são subdivididas com sobreposição.
+A prévia offline da capa local identificou cabeçalho e duas colunas: três detalhes
+mais uma visão geral. Estimativa de imagens: **5.000 tokens contra 18.392 na grade
+4x3 (72,8% menos)**, incluindo a visão geral. Isso não mede redução total de custo,
+nem comprova melhoria da transcrição. A imagem já termina com texto cortado na base;
+recortar melhor não recupera conteúdo ausente da captura.
+
+Validação local: `pytest tests/` com 114 testes, incluindo cobertura integral dos
+pixels, cabeçalho abrangente, colunas, linhas, pequenas inclinações, página em branco,
+integração dos dois prompts e prévia sem rede. `pytest` sem diretório também coleta
+scripts experimentais que abrem Chrome; esses não fazem parte da suíte unitária.
+
+Correções de interpretação do benchmark anterior:
+- `full` usava effort low e `structure` medium; comparar com `--effort low` antes de
+  concluir sobre os modos. Texto curto em structure é previsto pelo prompt.
+- O manifesto golden ainda não é um gabarito humano. Sobreposição com OCR não valida
+  nomes, relações ou grafia. A escolha de produção e o descarte de modelos são provisórios.
+- Custo API equivalente combina entrada estimada e saída do CLI, não uma chamada medida
+  da API; tarifas/aliases e gastos com tentativas falhas precisam ser auditados.
+- O problema com `$defs` foi observado nas rodadas locais, não prova incompatibilidade
+  universal. O contorno por inlining permanece.
+- `ocr-hires --bib 029033_01 --max-pages 20` não captura os IDs do manifesto, que abrange
+  vários acervos. Captura direcionada e benchmark das 19 imagens faltantes seguem pendentes.
+
+Tentativa de leitura real em 2026-09-10: interrompida antes da inferência com
+HTTP 401, `OAuth access token has been revoked`, zero tokens. É necessário
+`claude auth login` antes da comparação grade/layout. O backend agora preserva
+esse diagnóstico mesmo quando o processo retorna código diferente de zero,
+registra `modelUsage` quando disponível e não atribui custo fictício a essa falha.
+
 ## Arquitetura alvo
 
 ```
@@ -108,3 +142,31 @@ imagem hi-res ──► tiles ──► Claude (schema PageExtraction, Batch) �
 5. Fases 6 e 7 correm em paralelo conforme a captura e a hospedagem exigirem.
 
 Detalhe por item em `tasks.md`.
+
+
+## Preparação offline da avaliação (2026-09-10)
+
+> **Resolvido em 2026-09-18.** As 20 páginas douradas foram capturadas e estão em
+> `data/images/`. A causa da falha de certificado era o servidor enviar só o
+> certificado folha; `src/scraping/tls.py` monta o bundle com o intermediário e a
+> verificação TLS voltou a ficar ligada (antes era `CERT_NONE`). A captura por ID
+> (`ocr-hires --pages` / `--golden`) foi implementada, com dois bugs corrigidos no
+> caminho: a navegação precisava ser explícita antes de cada leitura, e a primeira
+> página de cada acervo não pode ser "pulada" de novo, porque já está em tela após
+> o setup. O Chrome instalado é o 153 e a versão já era detectada dinamicamente.
+
+Nenhuma chamada ao Claude nesta etapa. A captura das 19 imagens pendentes estava bloqueada
+por falha de conexão no navegador e de validação de certificado em HTTP/Python. Continua
+existindo apenas uma imagem local. O capturador Selenium fixa Chrome 146; o instalado é 152.
+
+Foram preparados cinco trechos da capa, transcritos visualmente pelo assistente e marcados
+como referência provisória, sem revisão humana. O novo módulo `src.vision.evaluation`
+mede CER/WER por alinhamento de trechos e grava os textos encontrados para auditoria.
+Os arquivos de revisão estão na pasta de outputs desta tarefa (`avaliacao-ocr`).
+
+Nos trechos escolhidos, o Opus 2x2 apresentou CER 0%, Opus 4x3 2,7%, Opus 3x2 14,7%,
+Sonnet 4x3 14,3% e Haiku 4x3 55,1%. Estes resultados NÃO são uma classificação da página
+inteira: os nomes duvidosos foram excluídos e a amostra não representa páginas densas.
+Uma diferença observada é `um` na imagem e `hum` no Opus 4x3. O prompt passou a proibir
+explicitamente tanto modernização quanto arcaização da grafia. Essa alteração de prompt
+ainda precisa de teste real controlado.

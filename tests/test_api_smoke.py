@@ -29,6 +29,9 @@ def _install_test_stubs():
         def add_middleware(self, *args, **kwargs):
             return None
 
+        def include_router(self, router, **kwargs):
+            self.routes.extend(router.routes)
+
         def mount(self, *args, **kwargs):
             return None
 
@@ -42,6 +45,13 @@ def _install_test_stubs():
                 return func
             return decorator
 
+    fastapi.APIRouter = FastAPI
+    class HTTPException(Exception):
+        def __init__(self, status_code, detail):
+            self.status_code = status_code
+            self.detail = detail
+            super().__init__(detail)
+    fastapi.HTTPException = HTTPException
     fastapi.FastAPI = FastAPI
     fastapi.Query = lambda default=None, **kwargs: default
     fastapi.File = lambda default=None, **kwargs: default

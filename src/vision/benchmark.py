@@ -13,6 +13,7 @@ import json
 import re
 import statistics
 from collections import Counter
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -21,6 +22,7 @@ from src.config import DATA_DIR, IMAGES_DIR, TEXT_DIR
 from src.processing.ocr_quality import score_ocr_text
 from src.vision.reader import (
     CONFIGS,
+    DEEPSEEK_BACKENDS,
     ReadConfig,
     ReadResult,
     build_request,
@@ -104,6 +106,8 @@ def select_configs(
     names: Iterable[str] | None,
     grid: tuple[int, int] | None = None,
     backend: str | None = None,
+    tiling: str = "grid",
+    effort: str | None = None,
 ) -> list[ReadConfig]:
     chosen = list(names) if names else list(CONFIGS)
     configs = []
@@ -113,8 +117,17 @@ def select_configs(
         config = CONFIGS[name]
         if grid:
             config = config.with_grid(grid)
-        if backend:
+        if backend and config.backend not in DEEPSEEK_BACKENDS:
             config = config.with_backend(backend)
+        if tiling not in ("grid", "layout"):
+            raise ValueError(f"Estratégia inválida: {tiling}")
+        config = replace(config, tiling=tiling)
+        if effort is not None:
+            if effort not in ("low", "medium", "high"):
+                raise ValueError(f"Esforço inválido: {effort}")
+            if config.effort is None:
+                raise ValueError(f"{config.name} não suporta --effort")
+            config = replace(config, effort=effort)
         configs.append(config)
     return configs
 
@@ -203,6 +216,8 @@ def run_benchmark(
     *,
     grid: tuple[int, int] | None = None,
     backend: str | None = None,
+    tiling: str = "grid",
+    effort: str | None = None,
     out_dir: Path | None = None,
     dry_run: bool = False,
     extrapolate_pages: int = DEFAULT_EXTRAPOLATION_PAGES,
@@ -211,7 +226,7 @@ def run_benchmark(
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Executa (ou só estima, em dry-run) todas as combinações e grava os artefatos."""
-    configs = select_configs(config_names, grid, backend)
+    configs = select_configs(config_names, grid, backend, tiling, effort)
     out_dir = out_dir or (BENCHMARK_DIR / datetime.now().strftime("%Y%m%d_%H%M%S"))
     out_dir.mkdir(parents=True, exist_ok=True)
     say = progress or (lambda _msg: None)
@@ -223,13 +238,25 @@ def run_benchmark(
     results: list[dict[str, Any]] = []
     for page in available:
         reference_text = page["reference"].read_text(encoding="utf-8", errors="ignore") if page["reference"] else None
-        tiles_cache: dict[tuple[int, int], list] = {}
+        tiles_cache: dict[tuple, list] = {}
         for config in configs:
-            tiles = tiles_cache.get(config.grid)
+            cache_key = (config.grid, config.overlap)
+            tiles = tiles_cache.get(cache_key)
             if tiles is None:
-                tiles = tiles_cache[config.grid] = make_tiles(page["image"], grid=config.grid)
+                extra = {"overlap": config.overlap} if config.overlap is not None else {}
+                tiles = tiles_cache[cache_key] = make_tiles(page["image"], grid=config.grid, strategy=config.tiling, **extra)
 
-            if dry_run:
+            if dry_run and config.backend in DEEPSEEK_BACKENDS:
+                from src.vision.deepseek_reader import DEEPSEEK_TOKENS_PER_IMAGE
+
+                estimate = 0 if config.backend == "deepseek-text" else len(tiles) * DEEPSEEK_TOKENS_PER_IMAGE
+                item = {"config": config.name, "model": config.model, "mode": config.mode, "page": page["id"],
+                        "grid": list(config.grid), "tiles": 0 if config.backend == "deepseek-text" else len(tiles),
+                        "tiles_tokens_estimate": estimate, "tiles_bytes": 0,
+                        "usage": {"input_tokens": 0, "output_tokens": 0}, "cost_usd": 0.0, "cost_usd_batch": 0.0,
+                        "elapsed_s": 0.0, "dry_run": True, "quality": {}, "error": None}
+                say(f"{page['id']} x {config.name}: ~{estimate:,} tokens de imagem estimados")
+            elif dry_run:
                 if client is None:
                     from src.vision.reader import get_client
 
@@ -277,6 +304,8 @@ def run_benchmark(
                 )
                 say(f"{page['id']} x {config.name}: {status}")
 
+            item["tiling"] = config.tiling
+            item["effort"] = config.effort
             item["reference"] = str(page["reference"]) if page["reference"] else None
             (out_dir / f"{page['id']}__{config.name}.json").write_text(
                 json.dumps(item, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -292,6 +321,8 @@ def run_benchmark(
         "missing_images": missing,
         "configs": [config.name for config in configs],
         "backend": backend or "api",
+        "tiling": tiling,
+        "effort_override": effort,
         "by_config": aggregate(results, extrapolate_pages),
         "results": results,
     }

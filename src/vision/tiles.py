@@ -33,6 +33,8 @@ class Tile:
     width: int  # após redimensionar
     height: int
     jpeg: bytes
+    kind: str = "detail"  # overview is orientation only
+    strategy: str = "grid"
 
     @property
     def tokens_estimate(self) -> int:
@@ -102,16 +104,30 @@ def make_tiles(
     grid: tuple[int, int] = DEFAULT_GRID,
     overlap: float = DEFAULT_OVERLAP,
     quality: int = 85,
+    strategy: str = "grid",
 ) -> list[Tile]:
     """Recorta a página numa grade CxR e devolve tiles JPEG em tons de cinza."""
     if not isinstance(image, Image.Image):
         image = Image.open(image)
     page = image.convert("L")
+    if strategy not in ("grid", "layout"):
+        raise ValueError(f"Estratégia inválida: {strategy}")
     cols, rows = grid
+    if cols < 1 or rows < 1 or not 0 <= overlap < .5:
+        raise ValueError("Grade deve ser positiva e sobreposição deve estar entre 0 e 0.5")
+    boxes = tile_boxes(page.width, page.height, cols, rows, overlap)
+    if strategy == "layout":
+        from src.vision.layout import layout_boxes
+        boxes, metadata = layout_boxes(page)
+        pad = max(8, round((metadata["glyph_height_estimate"] or 20) * .4))
+        boxes = [(col, row, (max(0, x0-pad), max(0, y0-pad), min(page.width, x1+pad), min(page.height, y1+pad)))
+                 for col, row, (x0, y0, x1, y1) in boxes]
+        boxes.insert(0, (-1, -1, (0, 0, page.width, page.height)))
     tiles: list[Tile] = []
-    for index, (col, row, box) in enumerate(tile_boxes(page.width, page.height, cols, rows, overlap)):
+    for index, (col, row, box) in enumerate(boxes):
         crop = page.crop(box)
-        target = fit_size(crop.width, crop.height)
+        kind = "overview" if col == -1 else "detail"
+        target = fit_size(crop.width, crop.height, max_long_edge=1000) if kind == "overview" else fit_size(crop.width, crop.height)
         if target != (crop.width, crop.height):
             crop = crop.resize(target, Image.Resampling.LANCZOS)
         buffer = io.BytesIO()
@@ -125,6 +141,8 @@ def make_tiles(
                 width=crop.width,
                 height=crop.height,
                 jpeg=buffer.getvalue(),
+                kind=kind,
+                strategy=strategy,
             )
         )
     return tiles
@@ -136,3 +154,33 @@ def page_tokens_estimate(tiles: list[Tile]) -> int:
 
 def page_bytes(tiles: list[Tile]) -> int:
     return sum(len(tile.jpeg) for tile in tiles)
+
+
+def describe_tiles(tiles: list[Tile]) -> str:
+    if not tiles:
+        raise ValueError("Página sem recortes")
+    if tiles[0].strategy == "grid":
+        cols = max(t.col for t in tiles) + 1
+        rows = max(t.row for t in tiles) + 1
+        return (f"Página dividida em {len(tiles)} recortes: grade de {cols} colunas por {rows} faixas, "
+                "numerados da esquerda para a direita e de cima para baixo.")
+    return ("Recortes adaptados ao layout. O recorte 0 é uma VISÃO GERAL apenas para orientação: "
+            "não transcreva nem duplique seu texto. Leia os recortes de detalhe e use suas caixas "
+            "(x0, y0, x1, y1), em pixels da página original, para reconstruir a ordem de leitura. "
+            "Cabeçalhos podem atravessar colunas. Uma coluna deve ser lida de cima a baixo antes da próxima. "
+            "As regiões e a ordem sugerida são heurísticas: confirme na visão geral. "
+            "Sobreposições existem para recuperar palavras nas bordas, nunca duplique linhas.")
+
+
+def tile_label(tile: Tile) -> str:
+    if tile.kind == "overview":
+        return f"Recorte {tile.index}: VISÃO GERAL (orientação apenas)"
+    if tile.strategy == "layout":
+        return f"Recorte {tile.index}: detalhe, caixa {tile.box}"
+    return f"Recorte {tile.index} (coluna {tile.col + 1}, faixa {tile.row + 1})"
+
+
+def tiles_manifest(tiles: list[Tile]) -> list[dict]:
+    return [{"index": t.index, "kind": t.kind, "strategy": t.strategy, "box": list(t.box),
+             "width": t.width, "height": t.height, "tokens_estimate": t.tokens_estimate,
+             "scale": round(t.height / (t.box[3] - t.box[1]), 4)} for t in tiles]

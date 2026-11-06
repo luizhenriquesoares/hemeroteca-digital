@@ -158,6 +158,37 @@ class ClaudeCodeReaderTests(unittest.TestCase):
         self.assertIsNone(result.error)
         self.assertEqual(result.extraction["segments"][0]["text"], "Edital")
 
+    def test_nonzero_json_preserves_auth_error_without_fictitious_cost(self):
+        payload = {"is_error": True, "result": "OAuth access token has been revoked", "usage": {},
+                   "api_error_status": 401, "modelUsage": {}}
+        def runner(cmd, timeout):
+            return subprocess.CompletedProcess(cmd, 1, stdout=json.dumps(payload), stderr="")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "page.jpg"
+            _page().save(path)
+            result = cc.read_page_claude_code(path, CONFIGS["opus-full"], work_dir=Path(tmp), runner=runner)
+        self.assertIn("revoked", result.error)
+        self.assertEqual(result.details["api_error_status"], 401)
+        self.assertEqual(result.cost_usd, 0)
+        self.assertEqual(result.usage["input_tokens"], 0)
+
+    def test_cli_calls_use_distinct_live_directories_and_clean_up(self):
+        paths = []
+        def runner(cmd, timeout):
+            import re
+            file = Path(re.search(r"(/[^\n]*tile_00.jpg)", cmd[2]).group(1))
+            self.assertTrue(file.exists())
+            paths.append(file)
+            return subprocess.CompletedProcess(cmd, 0, stdout=_payload({"segments": []}), stderr="")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "page.jpg"
+            _page().save(path)
+            for _ in range(2):
+                result = cc.read_page_claude_code(path, CONFIGS["opus-full"], work_dir=Path(tmp), runner=runner)
+                self.assertIsNone(result.error)
+            self.assertNotEqual(paths[0], paths[1])
+            self.assertTrue(all(not p.exists() for p in paths))
+
     def test_with_backend_validates(self):
         with self.assertRaises(ValueError):
             CONFIGS["opus-full"].with_backend("gemini")

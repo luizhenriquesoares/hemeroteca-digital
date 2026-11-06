@@ -1,0 +1,22 @@
+[Unit]
+Description=Scriptorium - painel de transcricao da Hemeroteca PE
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=hemeroteca
+Group=hemeroteca
+WorkingDirectory=/opt/hemeroteca/app
+EnvironmentFile=/etc/hemeroteca/painel.env
+Environment=PATH=/opt/hemeroteca/.local/bin:/opt/hemeroteca/venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/opt/hemeroteca
+Environment=FORWARDED_ALLOW_IPS=*
+# 172.16.0.1 = gateway do docker0: so o Caddy (container foxymilhas-landing) alcanca o painel
+ExecStart=/opt/hemeroteca/venv/bin/python main.py painel --no-browser --host 172.16.0.1 --port 8765
+Restart=on-failure
+RestartSec=10
+MemoryMax=1800M
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

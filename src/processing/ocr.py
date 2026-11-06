@@ -18,6 +18,7 @@ from src.processing.ocr_quality import (
     compare_with_existing,
     limpar_texto as _limpar_texto,
     score_ocr_text as _score_ocr_text,
+    select_best_by_consensus as _select_best_by_consensus,
     select_best_ocr_result as _select_best_ocr_result,
 )
 from src.processing.ocr_storage import (
@@ -30,20 +31,48 @@ from src.processing.ocr_storage import (
 # Número de colunas para segmentação (2 colunas equilibra ganho em multi-coluna
 # com perda mínima em coluna única — testado empiricamente)
 N_COLUNAS = 2
+# Variantes CLAHE, medida a melhor família na capa de 1825 em resolução cheia.
+# A diversidade agora está no recorte de histograma e no PSM, não no limiar de
+# binarização. `binarize_legacy` fica para o consenso ter uma leitura
+# independente do caminho antigo e para permitir reversão rápida.
 OCR_VARIANTS = (
-    {"name": "balanced_psm6", "threshold": 130, "contrast": 2.0, "sharpness": 2.5, "psm": 6, "n_cols": "auto"},
-    {"name": "lighter_psm6", "threshold": 145, "contrast": 2.2, "sharpness": 2.4, "psm": 6, "n_cols": "auto"},
-    {"name": "darker_psm4", "threshold": 118, "contrast": 1.8, "sharpness": 2.1, "psm": 4, "n_cols": "auto"},
-    {"name": "singlecol_psm4", "threshold": 130, "contrast": 1.9, "sharpness": 2.2, "psm": 4, "n_cols": 1},
+    {"name": "clahe_psm6", "method": "clahe", "clip": 2.0, "psm": 6, "n_cols": "auto"},
+    {"name": "clahe_soft_psm6", "method": "clahe", "clip": 1.5, "psm": 6, "n_cols": "auto"},
+    {"name": "clahe_strong_psm6", "method": "clahe", "clip": 3.0, "psm": 6, "n_cols": "auto"},
+    {"name": "clahe_psm4", "method": "clahe", "clip": 2.0, "psm": 4, "n_cols": "auto"},
+    {
+        "name": "binarize_legacy", "method": "binarize",
+        "threshold": 130, "contrast": 2.0, "sharpness": 2.5, "psm": 6, "n_cols": "auto",
+    },
 )
 
 logger = logging.getLogger(__name__)
 Image.MAX_IMAGE_PIXELS = None
 
 
+def _clahe(gray: Image.Image, clip: float = 2.0) -> Image.Image:
+    """Equalização adaptativa de histograma (CLAHE) sobre a escala de cinza.
+
+    Medido na capa de 1825 em resolução cheia: F1 0,531 contra 0,502 da melhor
+    variante binarizada e 0,447 da variante que o seletor antigo escolhia, com
+    ~7x menos CPU por ser uma passada só. Cai para a imagem original se o
+    OpenCV não estiver disponível.
+    """
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        logger.warning("OpenCV indisponível: pré-processamento CLAHE desativado")
+        return gray
+    arr = np.array(gray)
+    return Image.fromarray(cv2.createCLAHE(clipLimit=clip, tileGridSize=(8, 8)).apply(arr))
+
+
 def preprocessar_imagem(
     img_path: Path,
     *,
+    method: str = "clahe",
+    clip: float = 2.0,
     threshold: int = 130,
     contrast: float = 2.0,
     sharpness: float = 2.5,
@@ -52,11 +81,13 @@ def preprocessar_imagem(
     """
     Pré-processamento da imagem para melhorar OCR em jornais históricos.
 
-    - Upscale 4x com Lanczos (imagens da HDB são ~491x676, muito pequenas para OCR)
-    - Converte para escala de cinza
-    - Denoise com filtro mediana
-    - Aumenta contraste e nitidez
-    - Aplica binarização
+    `method="clahe"` (padrão): cinza -> CLAHE. Sem binarizar, sem mediana.
+    A binarização global e o filtro de mediana foram medidos como prejudiciais
+    nesta página: a mediana destrói traços finos e o limiar fixo descarta
+    informação em papel manchado.
+
+    `method="binarize"`: caminho antigo (mediana -> contraste -> nitidez ->
+    limiar global), mantido para comparação e reversão.
     """
     img = Image.open(img_path)
 
@@ -75,6 +106,12 @@ def preprocessar_imagem(
 
     if upscale > 1:
         img = img.resize((img.width * upscale, img.height * upscale), Image.LANCZOS)
+
+    if method == "clahe":
+        return _clahe(img, clip=clip)
+
+    if method != "binarize":
+        raise ValueError(f"Método de pré-processamento inválido: {method!r}")
 
     # Denoise com filtro mediana (remove ruído de papel envelhecido sem borrar texto)
     img = img.filter(ImageFilter.MedianFilter(3))
@@ -206,9 +243,11 @@ def extrair_texto_com_qualidade(img_path: Path, preprocessar: bool = True) -> OC
         for variant in OCR_VARIANTS:
             img = preprocessar_imagem(
                 img_path,
-                threshold=variant["threshold"],
-                contrast=variant["contrast"],
-                sharpness=variant["sharpness"],
+                method=variant.get("method", "clahe"),
+                clip=variant.get("clip", 2.0),
+                threshold=variant.get("threshold", 130),
+                contrast=variant.get("contrast", 2.0),
+                sharpness=variant.get("sharpness", 2.5),
             )
             texto = _limpar_texto(
                 _ocr_segmentado(
@@ -226,7 +265,7 @@ def extrair_texto_com_qualidade(img_path: Path, preprocessar: bool = True) -> OC
                     metrics=metrics,
                 )
             )
-        return _select_best_ocr_result(candidates)
+        return _select_best_by_consensus(candidates)
     except Exception as e:
         logger.error(f"Erro OCR em {img_path.name}: {e}")
         return OCRResult(text="", score=0.0, variant="error", metrics=_score_ocr_text(""))

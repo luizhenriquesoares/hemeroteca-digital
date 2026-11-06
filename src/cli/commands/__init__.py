@@ -1,5 +1,6 @@
 """Registro de comandos do CLI."""
 
+from src.cli.commands.pipeline import register_pipeline_commands
 from src.cli.commands.processing import register_processing_commands
 from src.cli.commands.query import register_query_commands
 from src.cli.commands.scraping import register_scraping_commands
@@ -13,3 +14,4 @@ def register_commands(cli) -> None:
     register_structured_commands(cli)
     register_query_commands(cli)
     register_vision_commands(cli)
+    register_pipeline_commands(cli)

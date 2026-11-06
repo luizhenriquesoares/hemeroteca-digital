@@ -16,7 +16,6 @@ Melhorias desta versão:
 import json
 import logging
 import re
-import ssl
 import tempfile
 import time
 import urllib.request
@@ -59,12 +58,11 @@ from src.scraping.hires_orchestrator import (
     processar_acervo_paralelo as _processar_acervo_paralelo_impl,
     processar_todos_hires as _processar_todos_hires_impl,
 )
+from src.scraping.tls import ssl_context
 
 logger = logging.getLogger(__name__)
 
-_SSL_CTX = ssl.create_default_context()
-_SSL_CTX.check_hostname = False
-_SSL_CTX.verify_mode = ssl.CERT_NONE
+_SSL_CTX = ssl_context()
 
 HIRES_SIZE = "6464x8940"
 
@@ -128,23 +126,36 @@ def _detectar_n_colunas(img) -> int:
 
 
 _HIRES_VARIANTS = [
-    {"name": "balanced",   "threshold": 130, "contrast": 1.8, "sharpness": 2.0, "median": 3, "psm": 6, "n_cols": "auto"},
-    {"name": "lighter",    "threshold": 145, "contrast": 2.2, "sharpness": 2.4, "median": 3, "psm": 6, "n_cols": "auto"},
-    {"name": "darker",     "threshold": 118, "contrast": 1.8, "sharpness": 2.1, "median": 5, "psm": 4, "n_cols": "auto"},
-    {"name": "singlecol",  "threshold": 130, "contrast": 1.9, "sharpness": 2.2, "median": 3, "psm": 4, "n_cols": 1},
-    {"name": "fullpage",   "threshold": 135, "contrast": 2.0, "sharpness": 2.0, "median": 3, "psm": 3, "n_cols": 1},
+    {"name": "clahe",        "method": "clahe", "clip": 2.0, "psm": 6, "n_cols": "auto"},
+    {"name": "clahe_soft",   "method": "clahe", "clip": 1.5, "psm": 6, "n_cols": "auto"},
+    {"name": "clahe_strong", "method": "clahe", "clip": 3.0, "psm": 6, "n_cols": "auto"},
+    {"name": "clahe_psm4",   "method": "clahe", "clip": 2.0, "psm": 4, "n_cols": "auto"},
+    # Leitura independente pelo caminho antigo: dá ao consenso uma referência
+    # fora da família CLAHE e mantém a binarização a um flag de distância.
+    {"name": "binarize_legacy", "method": "binarize", "threshold": 130, "contrast": 1.8,
+     "sharpness": 2.0, "median": 3, "psm": 6, "n_cols": "auto"},
 ]
+
+
+def _aplicar_preprocessamento(img_gray, variant: dict):
+    """Aplica o pré-processamento da variante (CLAHE ou binarização legada)."""
+    method = variant.get("method", "binarize")
+    if method == "clahe":
+        from src.processing.ocr import _clahe
+        return _clahe(img_gray.copy(), clip=variant.get("clip", 2.0))
+
+    from PIL import ImageEnhance, ImageFilter
+
+    img = img_gray.copy()
+    img = img.filter(ImageFilter.MedianFilter(variant.get("median", 3)))
+    img = ImageEnhance.Contrast(img).enhance(variant.get("contrast", 2.0))
+    img = ImageEnhance.Sharpness(img).enhance(variant.get("sharpness", 2.0))
+    return img.point(lambda p: 255 if p > variant.get("threshold", 130) else 0)
 
 
 def _ocr_single_variant(img_gray, variant: dict) -> str:
     """Roda OCR com uma configuração específica."""
-    from PIL import ImageEnhance, ImageFilter
-
-    img = img_gray.copy()
-    img = img.filter(ImageFilter.MedianFilter(variant["median"]))
-    img = ImageEnhance.Contrast(img).enhance(variant["contrast"])
-    img = ImageEnhance.Sharpness(img).enhance(variant["sharpness"])
-    img = img.point(lambda p: 255 if p > variant["threshold"] else 0)
+    img = _aplicar_preprocessamento(img_gray, variant)
 
     w, h = img.size
     margin = int(w * 0.02)
@@ -209,34 +220,51 @@ def _limpar_ocr(texto: str) -> str:
 
 
 def _ocr_hires(img_path: Path) -> str:
-    """OCR multi-variant: roda múltiplas configs e seleciona a melhor."""
+    """OCR multi-variante: roda as configurações e escolhe por consenso.
+
+    A escolha era feita pelo maior `score_ocr_text`, que saturava em 120 palavras
+    e premiava caracteres por linha — ou seja, escolhia a variante de coluna
+    única, a pior segmentação para um jornal de várias colunas. Medido na capa de
+    1825: o seletor antigo pegava uma leitura com 8 de 22 âncoras; por consenso
+    sobe para 13.
+    """
     from PIL import Image
-    from src.processing.ocr_quality import score_ocr_text
+    from src.processing.ocr_quality import (
+        OCRResult,
+        score_ocr_text,
+        select_best_by_consensus,
+    )
 
     img_gray = Image.open(img_path).convert("L")
 
-    best_text = ""
-    best_score = -1.0
-    best_variant = ""
-
+    candidates: list[OCRResult] = []
     for variant in _HIRES_VARIANTS:
         try:
             texto = _ocr_single_variant(img_gray, variant)
-            if not texto:
-                continue
-            metrics = score_ocr_text(texto)
-            score = metrics["score"]
-            if score > best_score:
-                best_score = score
-                best_text = texto
-                best_variant = variant["name"]
         except Exception as e:
             logger.debug(f"Variante {variant['name']} falhou: {e}")
+            continue
+        if not texto:
+            continue
+        metrics = score_ocr_text(texto)
+        candidates.append(
+            OCRResult(
+                text=texto,
+                score=metrics["score"],
+                variant=variant["name"],
+                metrics=metrics,
+            )
+        )
 
-    if best_variant:
-        logger.debug(f"OCR best variant: {best_variant} (score={best_score:.3f})")
+    if not candidates:
+        return ""
 
-    return best_text
+    best = select_best_by_consensus(candidates)
+    logger.debug(
+        "OCR escolhido por consenso: %s (score=%.3f, %d variantes)",
+        best.variant, best.score, len(candidates),
+    )
+    return best.text
 
 
 # ── Estado persistente ───────────────────────────────────────────────
@@ -361,6 +389,133 @@ def processar_acervo_hires(
             driver.quit()
         except Exception:
             pass
+
+
+def parse_page_ids(page_ids) -> dict[str, list[int]]:
+    """`['029033_01_09202']` -> `{'029033_01': [9202]}`.
+
+    Aceita lista de identificadores completos no formato `<bib>_<pagina>`, como
+    os de `src/vision/golden.json`. Agrupa por acervo e ordena as páginas.
+    """
+    por_bib: dict[str, list[int]] = {}
+    for bruto in page_ids:
+        identificador = str(bruto).strip()
+        if not identificador:
+            continue
+        bib, separador, pagina = identificador.rpartition("_")
+        if not separador or not bib or not pagina.isdigit():
+            raise ValueError(
+                f"ID de página inválido: {bruto!r} "
+                "(esperado <bib>_<pagina>, ex. 029033_01_09202)"
+            )
+        por_bib.setdefault(bib, []).append(int(pagina))
+    for paginas in por_bib.values():
+        paginas.sort()
+    return por_bib
+
+
+def processar_paginas_hires(
+    page_ids,
+    *,
+    headless: bool = True,
+    force: bool = False,
+    keep_images: bool = False,
+) -> dict:
+    """Captura páginas específicas pelo ID, sem varrer o acervo.
+
+    Abre o DocReader uma vez por acervo e pula direto para cada página via
+    `hPagFis` (`_refresh_hires_view`). A varredura sequencial é inviável para o
+    caso que motivou isto: as 19 páginas densas do manifesto `golden.json` estão
+    espalhadas por acervos de milhares de páginas.
+
+    Com `keep_images`, uma página cujo `.txt` já existe mas cuja imagem não está
+    em `data/images/` é capturada de novo — é justamente o caso das páginas
+    douradas, que foram processadas na carga em massa e tiveram a imagem apagada.
+    """
+    from src.scraping.driver import create_driver
+    from src.scraping.hires_orchestrator import get_acervo_nome
+
+    por_bib = parse_page_ids(page_ids)
+    stats: dict[str, dict] = {}
+
+    for bib, paginas in por_bib.items():
+        nome = get_acervo_nome(bib)
+        txt_dir = TEXT_DIR / bib
+        txt_dir.mkdir(parents=True, exist_ok=True)
+        img_dir = IMAGES_DIR / bib if keep_images else None
+        if img_dir:
+            img_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info("Hi-res por ID: %s (%s), %d página(s)", nome, bib, len(paginas))
+        driver = create_driver(headless=headless)
+        processadas = puladas = falhas = 0
+        try:
+            low_res_src, first_src = _setup_acervo(driver, bib, nome, start_page=paginas[0])
+            if not low_res_src or not first_src:
+                logger.error("%s: DocReader não abriu; pulando as %d páginas", bib, len(paginas))
+                stats[bib] = {"processed": 0, "skipped": 0, "failed": len(paginas),
+                              "reason": "setup_falhou"}
+                continue
+
+            # `_setup_acervo` já deixa a primeira página alvo em tela. Só é
+            # preciso navegar quando a página muda: pedir de novo a MESMA página
+            # e exigir um src diferente trava a espera até esgotar as tentativas
+            # (foi o que derrubou 029033_10_00002, 029033_13_00006 e
+            # 709611_00002, que são exatamente as primeiras de cada acervo).
+            pagina_atual = paginas[0]
+
+            for pagina in paginas:
+                txt_path = txt_dir / f"{bib}_{pagina:05d}.txt"
+                meta_path = txt_dir / f"{bib}_{pagina:05d}.json"
+                img_path = img_dir / f"{bib}_{pagina:05d}.jpg" if img_dir else None
+
+                if img_path and not img_path.exists():
+                    pass  # imagem faltando: capturar mesmo com .txt existente
+                elif _page_already_done(txt_path, meta_path, force):
+                    puladas += 1
+                    continue
+
+                # Pulo direto: `_process_page_with_retry` só força a recarga
+                # (`hPagFis`) como fallback, então com um src já válido em tela
+                # ele baixaria a imagem da página anterior. Aqui a navegação é
+                # explícita: guarda o src atual, manda o DocReader para a página
+                # alvo e passa o src antigo como `prev_src`, para a espera exigir
+                # uma imagem DIFERENTE — a da página certa.
+                if pagina != pagina_atual:
+                    src_anterior = _get_cache_url(driver)
+                    _refresh_hires_view(driver, pagina)
+                    time.sleep(CLICK_PAUSE)
+                    pagina_atual = pagina
+                else:
+                    src_anterior = None
+
+                sucesso, _, motivo = _process_page_with_retry(
+                    driver=driver,
+                    bib=bib,
+                    global_page=pagina,
+                    txt_path=txt_path,
+                    meta_path=meta_path,
+                    img_dir=img_dir,
+                    prev_src=src_anterior,
+                    page_metadata=_get_page_metadata(driver, bib, nome, pagina),
+                )
+                if sucesso:
+                    processadas += 1
+                    _clear_failed_page(bib, pagina)
+                    logger.info("%s p%s: ok", bib, pagina)
+                else:
+                    falhas += 1
+                    _mark_failed_page(bib, pagina)
+                    logger.warning("%s p%s: falhou (%s)", bib, pagina, motivo)
+        finally:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+
+        stats[bib] = {"processed": processadas, "skipped": puladas, "failed": falhas}
+
+    return stats
 
 
 def _setup_acervo(driver, bib: str, nome: str, start_page: int = 1) -> tuple[str | None, str | None]:

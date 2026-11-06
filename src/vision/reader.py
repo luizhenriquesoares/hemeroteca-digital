@@ -12,14 +12,14 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 
 from src.vision.schema import PageExtraction
-from src.vision.tiles import DEFAULT_GRID, Tile, make_tiles, page_bytes, page_tokens_estimate
+from src.vision.tiles import DEFAULT_GRID, Tile, make_tiles, page_bytes, page_tokens_estimate, describe_tiles, tile_label, tiles_manifest
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 # US$ por milhão de tokens (API Anthropic, 2026-06). Cache: escrita 1,25x, leitura 0,1x.
 PRICING_USD_PER_MTOK: dict[str, dict[str, float]] = {
     "claude-opus-5": {"input": 5.0, "output": 25.0},
+    "claude-opus-5-5": {"input": 4.0, "output": 20.0},
+    "claude-sonnet-5-5": {"input": 2.0, "output": 10.0},
+    "claude-haiku-5-5": {"input": 0.10, "output": 0.50},
     "claude-sonnet-5": {"input": 2.0, "output": 10.0},
     "claude-haiku-4-5": {"input": 1.0, "output": 5.0},
 }
@@ -37,7 +40,8 @@ BATCH_MULT = 0.5
 MODES = ("full", "structure")
 
 
-BACKENDS = ("api", "claude-code")
+BACKENDS = ("api", "claude-code", "deepseek", "deepseek-text")
+DEEPSEEK_BACKENDS = ("deepseek", "deepseek-text")
 
 
 @dataclass(frozen=True)
@@ -50,13 +54,17 @@ class ReadConfig:
     max_tokens: int = 24000
     backend: str = "api"  # "api" (SDK, créditos) ou "claude-code" (CLI headless, assinatura)
 
+    tiling: str = "grid"
+    overlap: float | None = None  # sobreposição dos recortes; None = padrão de tiles.py (3%)
+    bands: int = 1  # DeepSeek: >1 lê a página em faixas horizontais, uma chamada por faixa
+
     def with_grid(self, grid: tuple[int, int]) -> "ReadConfig":
-        return ReadConfig(self.name, self.model, self.mode, grid, self.effort, self.max_tokens, self.backend)
+        return replace(self, grid=grid)
 
     def with_backend(self, backend: str) -> "ReadConfig":
         if backend not in BACKENDS:
             raise ValueError(f"Backend inválido: {backend!r} (use um de {BACKENDS})")
-        return ReadConfig(self.name, self.model, self.mode, self.grid, self.effort, self.max_tokens, backend)
+        return replace(self, backend=backend)
 
 
 CONFIGS: dict[str, ReadConfig] = {
@@ -66,11 +74,22 @@ CONFIGS: dict[str, ReadConfig] = {
     "sonnet-structure": ReadConfig("sonnet-structure", "claude-sonnet-5", "structure", effort="medium", max_tokens=12000),
     "haiku-full": ReadConfig("haiku-full", "claude-haiku-4-5", "full", effort=None),
     "haiku-structure": ReadConfig("haiku-structure", "claude-haiku-4-5", "structure", effort=None, max_tokens=12000),
+    "sonnet55-full": ReadConfig("sonnet55-full", "claude-sonnet-5-5", "full", effort="low", max_tokens=64000),
+    "haiku55-full": ReadConfig("haiku55-full", "claude-haiku-5-5", "full", effort="low", max_tokens=64000),
+    "opus55-full": ReadConfig("opus55-full", "claude-opus-5-5", "full", effort="low", max_tokens=64000),
+    # DeepSeek (rodada de 2026-10): imagem limitada a 1024 tokens/~1300 px, por isso grade mais fina.
+    "dsflash-full": ReadConfig("dsflash-full", "deepseek-flash", "full", grid=(4, 6), effort=None, max_tokens=32000, backend="deepseek"),
+    "dsflash-full-think": ReadConfig("dsflash-full-think", "deepseek-flash", "full", grid=(4, 6), effort="low", max_tokens=48000, backend="deepseek"),
+    "dsflash-bands3": ReadConfig("dsflash-bands3", "deepseek-flash", "full", grid=(4, 6), effort=None, max_tokens=32000, backend="deepseek", bands=3),
+    "dsflash-bands6": ReadConfig("dsflash-bands6", "deepseek-flash", "full", grid=(4, 6), effort=None, max_tokens=32000, backend="deepseek", bands=6),
+    "dsflash-bands6-ov": ReadConfig("dsflash-bands6-ov", "deepseek-flash", "full", grid=(4, 6), effort=None, max_tokens=32000, backend="deepseek", bands=6, overlap=0.12),
+    "dsflash-ocrtext": ReadConfig("dsflash-ocrtext", "deepseek-flash", "full", effort=None, max_tokens=32000, backend="deepseek-text"),
+    "dspro-ocrtext": ReadConfig("dspro-ocrtext", "deepseek-v4-pro", "full", effort=None, max_tokens=32000, backend="deepseek-text"),
 }
 
 SYSTEM_PROMPT = """Você é historiador e paleógrafo especialista em jornais brasileiros do século XIX (Pernambuco, 1825-1889).
 
-Você recebe UMA página de jornal dividida em recortes (tiles) numerados, dispostos em uma grade de colunas por faixas, apresentados da esquerda para a direita e de cima para baixo. Recortes vizinhos se sobrepõem levemente: um mesmo trecho pode aparecer no fim de um recorte e no início do seguinte. Nunca duplique esse trecho.
+Você recebe UMA página de jornal dividida em recortes (tiles) numerados, acompanhados de sua posição na página e, quando disponível, de uma visão geral para orientação. Recortes vizinhos se sobrepõem levemente: um mesmo trecho pode aparecer no fim de um recorte e no início do seguinte. Nunca duplique esse trecho.
 
 Sua tarefa é reconstituir a página como um leitor da época a leria:
 1. Identifique o layout (número de colunas do jornal) e o cabeçalho (título, data, número da edição, página).
@@ -79,7 +98,7 @@ Sua tarefa é reconstituir a página como um leitor da época a leria:
 4. Para cada segmento, extraia pessoas (nome completo como impresso, cargo ou condição, papel no item), instituições, lugares, embarcações, data mencionada e relações explícitas com trecho literal.
 
 Regras de transcrição:
-- Preserve a ortografia da época (Commandante, Escripturario, Affonso, hum, mesmo). Não modernize.
+- Preserve exatamente a grafia impressa. Não modernize nem arcaíze: mantenha um se estiver impresso um, e hum apenas se estiver impresso hum. Exemplos de grafia não são instruções de substituição.
 - Preserve maiúsculas, abreviaturas e pontuação originais. Desfaça apenas a hifenização de fim de linha.
 - Trecho ilegível: escreva [ilegível]. Leitura incerta: melhor leitura seguida de [?].
 - Não invente nomes, datas ou palavras. Se não está na imagem, não está na saída.
@@ -120,6 +139,8 @@ class ReadResult:
     backend: str = "api"
     cost_usd_reported: float | None = None  # custo informado pelo Claude Code (inclui overhead do harness)
     usage_cli: dict[str, int] = field(default_factory=dict)  # uso bruto do Claude Code, quando backend=claude-code
+    tiling: str = "grid"
+    tile_manifest: list[dict[str, Any]] = field(default_factory=list)
     details: dict[str, Any] = field(default_factory=dict)  # diagnóstico do run (turnos, subtype, trecho da resposta)
 
     def to_dict(self) -> dict[str, Any]:
@@ -176,23 +197,12 @@ def get_client(timeout: float = 900.0, max_retries: int = 2):
 
 
 def build_user_content(tiles: list[Tile], config: ReadConfig) -> list[dict[str, Any]]:
-    # A grade descrita ao modelo vem dos tiles reais, não da config (podem divergir).
-    cols = max(tile.col for tile in tiles) + 1
-    rows = max(tile.row for tile in tiles) + 1
-    content: list[dict[str, Any]] = [
-        {
-            "type": "text",
-            "text": (
-                f"Página dividida em {len(tiles)} recortes: grade de {cols} colunas por {rows} faixas, "
-                f"numerados de 0 a {len(tiles) - 1}, da esquerda para a direita e de cima para baixo."
-            ),
-        }
-    ]
+    content: list[dict[str, Any]] = [{"type": "text", "text": describe_tiles(tiles)}]
     for tile in tiles:
         content.append(
             {
                 "type": "text",
-                "text": f"Recorte {tile.index} (coluna {tile.col + 1}/{cols}, faixa {tile.row + 1}/{rows}):",
+                "text": tile_label(tile),
             }
         )
         content.append(
@@ -257,6 +267,8 @@ def _base_result(page: str, config: ReadConfig, tiles: list[Tile]) -> ReadResult
         tiles=len(tiles),
         tiles_tokens_estimate=page_tokens_estimate(tiles),
         tiles_bytes=page_bytes(tiles),
+        tiling=config.tiling,
+        tile_manifest=tiles_manifest(tiles),
     )
 
 
@@ -269,13 +281,17 @@ def read_page(
 ) -> ReadResult:
     """Lê uma página com a configuração dada e devolve resultado + custo."""
     image_path = Path(image_path)
+    if config.backend in DEEPSEEK_BACKENDS:
+        from src.vision.deepseek_reader import read_page_deepseek
+
+        return read_page_deepseek(image_path, config, client=client, tiles=tiles)
     if config.backend == "claude-code":
         from src.vision.claude_code_reader import read_page_claude_code
 
         return read_page_claude_code(image_path, config, tiles=tiles)
 
     client = client or get_client()
-    tiles = tiles if tiles is not None else make_tiles(image_path, grid=config.grid)
+    tiles = tiles if tiles is not None else make_tiles(image_path, grid=config.grid, strategy=config.tiling)
     result = _base_result(image_path.stem, config, tiles)
     request = build_request(tiles, config)
 

@@ -4,6 +4,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from difflib import SequenceMatcher
+
+# Palavras plausíveis em que a cobertura chega ao máximo. Sem teto rígido: o
+# termo usa raiz quadrada, então recall acima disso continua somando, com
+# retorno decrescente. O valor antigo (120, linear) saturava e deixava de
+# recompensar qualquer texto maior que ~120 palavras.
+COBERTURA_PALAVRAS = 300
 
 
 @dataclass(frozen=True)
@@ -39,6 +46,13 @@ def limpar_texto(texto: str) -> str:
 
 
 def score_ocr_text(texto: str) -> dict:
+    """Plausibilidade de um texto OCR isolado, de 0 a 1.
+
+    Mede só o que dá para saber olhando um texto sozinho: se parece idioma,
+    quanto texto plausível trouxe e se está limpo. **Não** premia caracteres
+    por linha — essa métrica é maximizada por ler um jornal de várias colunas
+    como uma coluna só, ou seja, pela pior segmentação possível.
+    """
     cleaned = limpar_texto(texto)
     words = re.findall(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'-]{1,}", cleaned)
     long_words = [word for word in words if len(word) >= 3]
@@ -54,14 +68,17 @@ def score_ocr_text(texto: str) -> dict:
         len(re.findall(r"[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]", cleaned)) / alpha_count if alpha_count else 0
     )
     valid_word_ratio = len(valid_words) / max(len(long_words), 1)
-    density = len(cleaned) / max(len(lines), 1)
     odd_char_ratio = odd_count / max(len(cleaned), 1)
+
+    # Cobertura: cresce com o volume de palavras plausíveis, com retorno
+    # decrescente e sem saturação dura.
+    cobertura = min(1.0, (len(valid_words) / COBERTURA_PALAVRAS) ** 0.5)
+
     score = (
-        valid_word_ratio * 0.52
-        + min(len(valid_words) / 120, 1.0) * 0.18
-        + min(density / 50, 1.0) * 0.14
-        + max(0, 1 - short_line_ratio) * 0.10
-        + max(0, 1 - odd_char_ratio * 8) * 0.06
+        valid_word_ratio * 0.34
+        + cobertura * 0.30
+        + max(0, 1 - short_line_ratio) * 0.16
+        + max(0, 1 - odd_char_ratio * 8) * 0.20
     )
 
     if len(cleaned) < 120:
@@ -93,6 +110,59 @@ def select_best_ocr_result(candidates: list[OCRResult]) -> OCRResult:
 def result_from_text(text: str, variant: str = "saved") -> OCRResult:
     metrics = score_ocr_text(text)
     return OCRResult(text=text, score=metrics["score"], variant=variant, metrics=metrics)
+
+
+def _tokens(texto: str) -> list[str]:
+    return re.findall(r"[^\W_]+", texto.lower(), flags=re.UNICODE)
+
+
+def text_agreement(a: str, b: str) -> float:
+    """Concordância de sequência de palavras entre duas leituras, de 0 a 1.
+
+    Compara a ordem das palavras, não só o conjunto: uma variante que lê um
+    jornal de duas colunas como uma coluna só reordena o texto inteiro e por
+    isso concorda pouco com as demais.
+    """
+    wa, wb = _tokens(a), _tokens(b)
+    if not wa or not wb:
+        return 0.0
+    return SequenceMatcher(None, wa, wb, autojunk=False).ratio()
+
+
+def select_best_by_consensus(candidates: list[OCRResult]) -> OCRResult:
+    """Escolhe, entre leituras da mesma página, a que mais concorda com as outras.
+
+    Uma métrica de texto isolado não sabe o que ficou de fora do resultado — foi
+    assim que a seleção por `score_ocr_text` passou a preferir a variante de
+    coluna única, que produz linhas longas e pouco texto. A concordância entre
+    leituras independentes é um sinal mais forte: erros de OCR são
+    majoritariamente independentes entre configurações, o layout lido não é.
+
+    O volume entra como fator brando para que uma leitura curta não vença só
+    por concordar através da omissão.
+    """
+    valid_candidates = [candidate for candidate in candidates if candidate.text.strip()]
+    if not valid_candidates:
+        return OCRResult(text="", score=0.0, variant="empty", metrics=score_ocr_text(""))
+    if len(valid_candidates) == 1:
+        return valid_candidates[0]
+
+    tamanhos = [len(_tokens(candidate.text)) for candidate in valid_candidates]
+    maior = max(tamanhos) or 1
+
+    scored: list[tuple[float, float, float, OCRResult]] = []
+    for index, candidate in enumerate(valid_candidates):
+        concordancia = sum(
+            text_agreement(candidate.text, other.text)
+            for position, other in enumerate(valid_candidates)
+            if position != index
+        ) / (len(valid_candidates) - 1)
+        volume = (tamanhos[index] / maior) ** 0.5
+        combinado = concordancia * (0.6 + 0.4 * volume)
+        scored.append((combinado, concordancia, volume, candidate))
+
+    best = max(scored, key=lambda item: (item[0], item[1], item[3].score))
+    return best[3]
 
 
 def compare_with_existing(existing_text: str, new_result: OCRResult) -> OCRComparison:

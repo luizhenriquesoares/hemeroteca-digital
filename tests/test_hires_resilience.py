@@ -191,16 +191,19 @@ class DriverStealthTests(unittest.TestCase):
         driver_stub = _ChromeDriverStub()
         captured = {}
 
-        def fake_chrome(*, options, use_subprocess, version_main):
+        def fake_chrome(*, options, use_subprocess, version_main, browser_executable_path):
             captured["options"] = options
             captured["use_subprocess"] = use_subprocess
             captured["version_main"] = version_main
             return driver_stub
 
-        with patch.object(scraping_driver.uc, "Chrome", side_effect=fake_chrome):
+        with patch.object(scraping_driver.uc, "Chrome", side_effect=fake_chrome), \
+             patch.object(scraping_driver.uc, "find_chrome_executable", return_value="/chrome"), \
+             patch.object(scraping_driver, "installed_chrome_major", return_value=152):
             driver = scraping_driver.create_driver(headless=True)
 
         self.assertIs(driver, driver_stub)
+        self.assertEqual(captured["version_main"], 152)
         args = getattr(captured["options"], "arguments", [])
         self.assertIn("--headless=new", args)
         self.assertIn("--lang=pt-BR", args)

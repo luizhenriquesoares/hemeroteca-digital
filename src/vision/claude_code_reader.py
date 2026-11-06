@@ -18,6 +18,7 @@ import logging
 import os
 import subprocess
 import time
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +33,7 @@ from src.vision.reader import (
     estimate_cost,
 )
 from src.vision.schema import PageExtraction
-from src.vision.tiles import Tile, make_tiles
+from src.vision.tiles import Tile, make_tiles, describe_tiles, tile_label
 
 logger = logging.getLogger(__name__)
 
@@ -61,16 +62,10 @@ def write_tiles(tiles: list[Tile], page_id: str, work_dir: Path | None = None) -
 def build_prompt(tiles: list[Tile], tile_paths: list[Path], config: ReadConfig) -> str:
     if config.mode not in MODES:
         raise ValueError(f"Modo inválido: {config.mode!r} (use um de {MODES})")
-    cols = max(tile.col for tile in tiles) + 1
-    rows = max(tile.row for tile in tiles) + 1
-    listing = "\n".join(
-        f"- Recorte {tile.index} (coluna {tile.col + 1}/{cols}, faixa {tile.row + 1}/{rows}): {path}"
-        for tile, path in zip(tiles, tile_paths)
-    )
+    listing = "\n".join(f"- {tile_label(tile)}: {path}" for tile, path in zip(tiles, tile_paths))
     return (
         f"{SYSTEM_PROMPT}\n\n"
-        f"A página está dividida em {len(tiles)} recortes: grade de {cols} colunas por {rows} faixas, "
-        f"numerados de 0 a {len(tiles) - 1}, da esquerda para a direita e de cima para baixo. "
+        f"{describe_tiles(tiles)}\n"
         "Leia TODOS os arquivos abaixo com a ferramenta Read, na ordem, antes de responder:\n"
         f"{listing}\n\n"
         f"{MODE_INSTRUCTIONS[config.mode]}\n\n"
@@ -163,6 +158,7 @@ def _details_from_payload(payload: dict[str, Any], raw_limit: int = 6000) -> dic
         "permission_denials": payload.get("permission_denials") or [],
         "api_error_status": payload.get("api_error_status"),
         "session_id": payload.get("session_id"),
+        "model_usage": payload.get("modelUsage") or {},
         "result_text": raw[:raw_limit] if isinstance(raw, str) else raw,
         "result_text_len": len(raw) if isinstance(raw, str) else None,
         "has_structured_output": payload.get("structured_output") is not None,
@@ -180,17 +176,21 @@ def read_page_claude_code(
 ) -> ReadResult:
     image_path = Path(image_path)
     runner = runner or run_claude_code  # resolvido na chamada, para testes trocarem o executor
-    tiles = tiles if tiles is not None else make_tiles(image_path, grid=config.grid)
+    tiles = tiles if tiles is not None else make_tiles(image_path, grid=config.grid, strategy=config.tiling)
     result = _base_result(image_path.stem, config, tiles)
     result.backend = "claude-code"
 
-    tile_paths = write_tiles(tiles, image_path.stem, work_dir)
-    prompt = build_prompt(tiles, tile_paths, config)
-    cmd = build_command(prompt, config, PageExtraction.model_json_schema())
-
     started = time.perf_counter()
     try:
-        proc = runner(cmd, timeout=timeout)
+        # Each call owns its tiles until Read finishes: concurrent grids/configs
+        # must never overwrite the files of an active CLI session.
+        root = work_dir or TILES_DIR
+        root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="read-", dir=root) as run_dir:
+            tile_paths = write_tiles(tiles, image_path.stem, Path(run_dir))
+            prompt = build_prompt(tiles, tile_paths, config)
+            cmd = build_command(prompt, config, PageExtraction.model_json_schema(), max_turns=max(60, 2 * len(tiles) + 8))
+            proc = runner(cmd, timeout=timeout)
     except subprocess.TimeoutExpired:
         result.elapsed_s = round(time.perf_counter() - started, 2)
         result.error = f"timeout ({timeout}s)"
@@ -202,7 +202,7 @@ def read_page_claude_code(
     result.elapsed_s = round(time.perf_counter() - started, 2)
 
     stdout = (proc.stdout or "").strip()
-    if proc.returncode != 0 or not stdout:
+    if not stdout:
         result.error = (proc.stderr or stdout or f"returncode={proc.returncode}").strip()[:500]
         logger.error("Claude Code falhou (%s, %s): %s", config.name, image_path.name, result.error)
         return result
@@ -210,7 +210,7 @@ def read_page_claude_code(
     try:
         payload = json.loads(stdout)
     except json.JSONDecodeError as exc:
-        result.error = f"saída não é JSON: {exc}"
+        result.error = (proc.stderr or stdout)[:500] if proc.returncode else f"saída não é JSON: {exc}"
         return result
 
     cli_usage = _usage_from_payload(payload)
@@ -231,8 +231,14 @@ def read_page_claude_code(
     result.cost_usd = round(estimate_cost(result.usage, config.model), 6)
     result.cost_usd_batch = round(estimate_cost(result.usage, config.model, batch=True), 6)
 
-    if payload.get("is_error"):
-        result.error = str(payload.get("result") or payload.get("subtype") or "erro")[:500]
+    if payload.get("is_error") or proc.returncode:
+        # Nonzero exit can still contain valid diagnostic JSON (e.g. revoked
+        # OAuth). Parse it before handling failure; never charge fictitious
+        # image input when the request failed before consuming any tokens.
+        if not any(cli_usage.get(key, 0) for key in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")):
+            result.usage["input_tokens"] = 0
+            result.cost_usd = result.cost_usd_batch = 0.0
+        result.error = str(payload.get("result") or proc.stderr or payload.get("subtype") or "erro")[:500]
         return result
 
     candidates = [unwrap_structured(payload.get("structured_output")), unwrap_structured(payload.get("result"))]

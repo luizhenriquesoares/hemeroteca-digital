@@ -3,12 +3,23 @@
 import logging
 import random
 import time
+import re
+import subprocess
 
 import undetected_chromedriver as uc
 
 from src.config import PAGE_LOAD_TIMEOUT, IMPLICIT_WAIT
 
 logger = logging.getLogger(__name__)
+
+
+def installed_chrome_major(binary: str) -> int:
+    """Match the driver to the installed browser instead of a frozen version."""
+    version = subprocess.check_output([binary, "--version"], text=True, timeout=10)
+    match = re.search(r"\b(\d+)\.\d+\.\d+\.\d+", version)
+    if not match:
+        raise RuntimeError("Não foi possível identificar a versão do Chrome instalado")
+    return int(match.group(1))
 
 STEALTH_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -71,7 +82,12 @@ def create_driver(headless: bool = True) -> uc.Chrome:
     options.add_argument("--disable-default-apps")
     options.add_argument("--disable-translate")
 
-    driver = uc.Chrome(options=options, use_subprocess=True, version_main=146)
+    binary = uc.find_chrome_executable()
+    if not binary:
+        raise RuntimeError("Chrome não encontrado para captura hi-res")
+    driver = uc.Chrome(options=options, use_subprocess=True,
+                       browser_executable_path=binary,
+                       version_main=installed_chrome_major(binary))
 
     driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
     driver.implicitly_wait(IMPLICIT_WAIT)
