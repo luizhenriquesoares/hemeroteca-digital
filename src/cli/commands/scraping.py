@@ -77,14 +77,58 @@ def register_scraping_commands(cli) -> None:
 
     @cli.command("ocr-hires")
     @click.option("--bib", default=None, help="Código do acervo específico")
+    @click.option(
+        "--pages",
+        default=None,
+        help="IDs de página separados por vírgula (ex. 029033_01_09202,029033_04_00002). "
+        "Captura só essas páginas, pulando direto para cada uma.",
+    )
+    @click.option("--golden", is_flag=True, help="Capturar as páginas de src/vision/golden.json")
     @click.option("--force", is_flag=True, help="Reprocessar páginas já convertidas")
     @click.option("--headless/--no-headless", default=True, help="Modo headless do Chrome (default: headless)")
-    @click.option("--workers", default=4, help="Número de Chrome drivers paralelos (default: 4)")
+    @click.option("--workers", default=4, help="Número de Chrome drivers paralelos (default: 4; não se aplica a --pages)")
     @click.option("--max-pages", default=0, help="Limite de páginas por acervo (0 = todas)")
     @click.option("--keep-images", is_flag=True, help="Salvar imagens hi-res em data/images/ (para validação)")
-    def ocr_hires(bib, force, headless, workers, max_pages, keep_images):
+    def ocr_hires(bib, pages, golden, force, headless, workers, max_pages, keep_images):
         """OCR em alta resolução máxima do DocReader."""
-        from src.scraping.hires_pipeline import HIRES_SIZE, processar_todos_hires
+        from src.scraping.hires_pipeline import (
+            HIRES_SIZE,
+            processar_paginas_hires,
+            processar_todos_hires,
+        )
+
+        if pages or golden:
+            alvos: list[str] = [p.strip() for p in (pages or "").split(",") if p.strip()]
+            if golden:
+                from src.vision.benchmark import load_golden
+
+                alvos += [p for p in load_golden() if p not in alvos]
+            if not alvos:
+                raise click.UsageError("--pages/--golden sem nenhum ID de página")
+
+            console.print(f"\n[bold]OCR Hi-Res por ID: {HIRES_SIZE}[/bold]")
+            console.print(f"[dim]{len(alvos)} página(s) em {len({'_'.join(p.split('_')[:2]) for p in alvos})} acervo(s)[/dim]")
+            if not keep_images:
+                console.print(
+                    "[yellow]Sem --keep-images a imagem é apagada após o OCR; "
+                    "o benchmark de visão precisa dela.[/yellow]"
+                )
+
+            stats = processar_paginas_hires(
+                alvos,
+                headless=headless,
+                force=force,
+                keep_images=keep_images,
+            )
+            for acervo, s in stats.items():
+                console.print(
+                    f"  {acervo}: {s['processed']} capturadas, {s['skipped']} puladas, "
+                    f"{s['failed']} falhas"
+                    + (f" [red]({s['reason']})[/red]" if s.get("reason") else "")
+                )
+            total = sum(s["processed"] for s in stats.values())
+            console.print(f"\n[bold green]Concluído: {total} páginas[/bold green]")
+            return
 
         console.print(f"\n[bold]OCR Hi-Res MÁXIMO: {HIRES_SIZE}[/bold]")
         if keep_images:

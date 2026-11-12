@@ -3,17 +3,31 @@
 import json
 import logging
 from pathlib import Path
+from typing import Optional
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from src.config import TEXT_DIR, CHUNKS_DIR, CHUNK_SIZE, CHUNK_OVERLAP
+from src import config
+from src.config import CHUNK_SIZE, CHUNK_OVERLAP
 
 logger = logging.getLogger(__name__)
+
+# Permite monkeypatch direto no módulo sem perder o fallback para src.config.
+TEXT_DIR: Optional[Path] = None
+CHUNKS_DIR: Optional[Path] = None
+
+
+def _text_dir() -> Path:
+    return TEXT_DIR or config.TEXT_DIR
+
+
+def _chunks_dir() -> Path:
+    return CHUNKS_DIR or config.CHUNKS_DIR
 
 
 def limpar_chunks_acervo(bib: str) -> dict[str, int]:
     """Remove os artefatos de chunking de um acervo específico."""
-    chunk_dir = CHUNKS_DIR / bib
+    chunk_dir = _chunks_dir() / bib
     if not chunk_dir.exists():
         return {"files_removed": 0, "chunks_removed": 0}
 
@@ -56,8 +70,8 @@ def criar_chunks_acervo(bib: str, force: bool = False) -> int:
     Returns:
         número de chunks criados
     """
-    txt_dir = TEXT_DIR / bib
-    chunk_dir = CHUNKS_DIR / bib
+    txt_dir = _text_dir() / bib
+    chunk_dir = _chunks_dir() / bib
     chunk_dir.mkdir(parents=True, exist_ok=True)
 
     chunk_file = chunk_dir / "chunks.jsonl"
@@ -132,11 +146,11 @@ def criar_chunks_todos(force: bool = False) -> dict:
     """Cria chunks para todos os acervos processados."""
     stats = {}
 
-    if not TEXT_DIR.exists():
+    if not _text_dir().exists():
         logger.warning("Nenhum diretório de texto encontrado")
         return stats
 
-    for acervo_dir in sorted(TEXT_DIR.iterdir()):
+    for acervo_dir in sorted(_text_dir().iterdir()):
         if acervo_dir.is_dir():
             bib = acervo_dir.name
             count = criar_chunks_acervo(bib, force=force)
@@ -150,11 +164,11 @@ def carregar_chunks(bib: str = None) -> list[dict]:
     chunks = []
 
     if bib:
-        chunk_file = CHUNKS_DIR / bib / "chunks.jsonl"
+        chunk_file = _chunks_dir() / bib / "chunks.jsonl"
         if chunk_file.exists():
             chunks = _ler_jsonl(chunk_file)
     else:
-        for chunk_file in sorted(CHUNKS_DIR.glob("*/chunks.jsonl")):
+        for chunk_file in sorted(_chunks_dir().glob("*/chunks.jsonl")):
             chunks.extend(_ler_jsonl(chunk_file))
 
     return chunks

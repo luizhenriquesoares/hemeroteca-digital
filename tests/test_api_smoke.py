@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import importlib.util
 import json
 import sys
 import tempfile
@@ -12,6 +13,8 @@ from unittest.mock import patch
 def _install_test_stubs():
     dotenv = ModuleType("dotenv")
     dotenv.load_dotenv = lambda *args, **kwargs: None
+    dotenv.dotenv_values = lambda *args, **kwargs: {}
+    dotenv.find_dotenv = lambda *args, **kwargs: ""
     sys.modules["dotenv"] = dotenv
 
     openai = ModuleType("openai")
@@ -27,6 +30,9 @@ def _install_test_stubs():
         def add_middleware(self, *args, **kwargs):
             return None
 
+        def include_router(self, router, **kwargs):
+            self.routes.extend(router.routes)
+
         def mount(self, *args, **kwargs):
             return None
 
@@ -40,8 +46,17 @@ def _install_test_stubs():
                 return func
             return decorator
 
+    fastapi.APIRouter = FastAPI
+    class HTTPException(Exception):
+        def __init__(self, status_code, detail):
+            self.status_code = status_code
+            self.detail = detail
+            super().__init__(detail)
+    fastapi.HTTPException = HTTPException
     fastapi.FastAPI = FastAPI
     fastapi.Query = lambda default=None, **kwargs: default
+    fastapi.File = lambda default=None, **kwargs: default
+    fastapi.UploadFile = object
     sys.modules["fastapi"] = fastapi
 
     middleware = ModuleType("fastapi.middleware")
@@ -75,7 +90,10 @@ def _install_test_stubs():
     sys.modules["starlette.concurrency"] = concurrency
 
 
-_install_test_stubs()
+# Só usa os stubs se as dependências reais não estiverem instaladas: stubs permanentes em
+# sys.modules quebravam os testes seguintes do painel (fastapi.testclient).
+if importlib.util.find_spec("fastapi") is None or importlib.util.find_spec("openai") is None:
+    _install_test_stubs()
 
 import src.config as config
 
@@ -257,6 +275,41 @@ Os Botelhos aparecem como grupo familiar ligado à administração provincial.
             self.assertEqual(serialized["jornal"], "Diario de Pernambuco (PE) - 1840 a 1849")
             self.assertEqual(serialized["ano"], "1840")
             self.assertEqual(serialized["edicao"], "00001")
+            self.assertEqual(
+                serialized["docreader_url"],
+                "https://memoria.bn.gov.br/docreader/docreader.aspx?bib=029033_02&pagfis=1",
+            )
+
+    def test_busca_serializa_evidencia_e_link_docreader(self):
+        fake_results = [
+            {
+                "id": "029033_02_029033_02_00001_chunk0",
+                "texto": "João Botelho aparece em nota administrativa do Diario de Pernambuco.",
+                "metadata": {
+                    "bib": "029033_02",
+                    "pagina": "029033_02_00001",
+                    "jornal": "Diario de Pernambuco",
+                    "ano": "1840",
+                    "edicao": "42",
+                },
+                "score": 0.91,
+                "modo": "hibrida",
+            }
+        ]
+
+        with patch.object(api, "buscar_hibrida", return_value=fake_results):
+            payload = asyncio.run(api.buscar(q="João Botelho", n=10, bib=None, modo="semantica", score_min=0.45, year_from=None, year_to=None))
+
+        self.assertEqual(payload["total"], 1)
+        result = payload["resultados"][0]
+        self.assertEqual(result["evidence_type"], "explicit_source")
+        self.assertEqual(result["evidence_label"], "Explicito na fonte")
+        self.assertIn("João Botelho", result["evidencia"])
+        self.assertEqual(result["page_view_url"], "/page/029033_02/029033_02_00001?q=Jo%C3%A3o%20Botelho")
+        self.assertEqual(
+            result["docreader_url"],
+            "https://memoria.bn.gov.br/docreader/docreader.aspx?bib=029033_02&pagfis=1",
+        )
 
     def test_view_page_renderiza_html_documental(self):
         page = {
@@ -266,6 +319,7 @@ Os Botelhos aparecem como grupo familiar ligado à administração provincial.
             "ano": "1840",
             "edicao": "00001",
             "image_url": None,
+            "docreader_url": "https://memoria.bn.gov.br/docreader/docreader.aspx?bib=029033_02&pagfis=1",
             "text_path": None,
             "image_path": None,
             "ocr_text": "PERNAMBUCO\\n\\nALFANDEGA DAS FAZENDAS.",
@@ -289,6 +343,7 @@ Os Botelhos aparecem como grupo familiar ligado à administração provincial.
         self.assertIn("Diario de Pernambuco", html)
         self.assertIn("ALFANDEGA DAS FAZENDAS", html)
         self.assertIn("Copiar citação", html)
+        self.assertIn("Abrir folha na BN", html)
         self.assertIn("Destacar termo nesta página", html)
         self.assertIn("Alfandega", html)
 
@@ -311,8 +366,43 @@ Os Botelhos aparecem como grupo familiar ligado à administração provincial.
             "evidences": [],
         }
 
-        serialized = serialize_entity(entity, lambda bib, pagina: None)
+        serialized = serialize_entity(
+            entity,
+            lambda bib, pagina: None,
+            lambda bib, pagina: f"https://memoria.bn.gov.br/docreader/docreader.aspx?bib={bib}&pagfis={pagina}",
+        )
         self.assertIn("/page/029033_02/1?q=Jo%C3%A3o%20Affonso%20Botelho", serialized["mentions"][0]["page_view_url"])
+        self.assertEqual(
+            serialized["mentions"][0]["docreader_url"],
+            "https://memoria.bn.gov.br/docreader/docreader.aspx?bib=029033_02&pagfis=1",
+        )
+
+    def test_get_entity_endpoint_includes_docreader_url(self):
+        with patch.object(api, "StructuredRepository") as repo_cls, \
+             patch.object(api, "_resolve_image_url", return_value=None):
+            repo = repo_cls.return_value
+            repo.get_entity.return_value = {
+                "id": 1,
+                "canonical_name": "João Affonso Botelho",
+                "aliases_json": "[]",
+                "attributes_json": "{}",
+                "mentions": [
+                    {
+                        "surface_form": "João Affonso Botelho",
+                        "bib": "029033_02",
+                        "pagina": "1",
+                    }
+                ],
+                "relations": [],
+                "evidences": [],
+            }
+
+            payload = asyncio.run(api.get_entity(1))
+
+        self.assertEqual(
+            payload["mentions"][0]["docreader_url"],
+            "https://memoria.bn.gov.br/docreader/docreader.aspx?bib=029033_02&pagfis=1",
+        )
 
     def test_review_relation_endpoint(self):
         with patch.object(api, "StructuredRepository") as repo_cls:
@@ -383,6 +473,10 @@ Os Botelhos aparecem como grupo familiar ligado à administração provincial.
         self.assertEqual(payload["top_snippet"]["page_api_url"], "/api/page/029033_02/0001")
         self.assertIn("/page/029033_02/0001", payload["top_snippet"]["page_view_url"])
         self.assertEqual(payload["top_snippet"]["image_url"], "/images/029033_02/0001.jpg")
+        self.assertEqual(
+            payload["top_snippet"]["docreader_url"],
+            "https://memoria.bn.gov.br/docreader/docreader.aspx?bib=029033_02&pagfis=1",
+        )
 
     def test_discovery_surnames_endpoint_returns_grouped_payload(self):
         with patch.object(api, "StructuredRepository") as repo_cls:
@@ -436,6 +530,18 @@ Os Botelhos aparecem como grupo familiar ligado à administração provincial.
 
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["review"]["review_status"], "rejected")
+
+
+class UploadEndpointsTests(unittest.TestCase):
+    def test_upload_endpoints_disabled_without_secret(self):
+        with patch.object(api, "_UPLOAD_SECRET", None):
+            payload = asyncio.run(api.clear_upload(secret="qualquer"))
+        self.assertEqual(payload, {"error": "upload disabled"})
+
+    def test_upload_endpoints_reject_wrong_secret(self):
+        with patch.object(api, "_UPLOAD_SECRET", "segredo-certo"):
+            payload = asyncio.run(api.extract_upload(secret="errado"))
+        self.assertEqual(payload, {"error": "unauthorized"})
 
 
 if __name__ == "__main__":

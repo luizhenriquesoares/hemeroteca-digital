@@ -9,9 +9,16 @@ de sessão autenticada do Claude Code CLI.
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
-from anthropic import Anthropic
 from dotenv import load_dotenv
+
+try:
+    from anthropic import Anthropic
+    _ANTHROPIC_AVAILABLE = True
+except ImportError:  # pragma: no cover - exercised indirectly in provider tests
+    Anthropic = Any  # type: ignore[assignment]
+    _ANTHROPIC_AVAILABLE = False
 
 load_dotenv()
 
@@ -59,6 +66,10 @@ def _resolve_model(model: str) -> str:
 
 def _get_client() -> Anthropic:
     global _client
+    if not _ANTHROPIC_AVAILABLE:
+        raise RuntimeError(
+            "Provider claude-api indisponível: instale a dependência opcional 'anthropic'."
+        )
     if _client is None:
         api_key = _load_api_key()
         if not api_key:

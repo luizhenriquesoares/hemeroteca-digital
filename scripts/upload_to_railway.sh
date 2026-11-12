@@ -13,7 +13,7 @@ set -euo pipefail
 
 RAILWAY_URL="${1:?Uso: $0 https://SEU-APP.up.railway.app}"
 RAILWAY_URL="${RAILWAY_URL%/}"  # remove trailing slash
-SECRET="hemeroteca2026"
+SECRET="${HEMEROTECA_UPLOAD_SECRET:?Defina HEMEROTECA_UPLOAD_SECRET (mesmo valor configurado no servidor)}"
 CHUNK_SIZE="40m"
 DATA_DIR="data"
 TMP_DIR=$(mktemp -d)

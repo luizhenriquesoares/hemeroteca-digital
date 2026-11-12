@@ -86,27 +86,50 @@ def _build_entity_summary(entity: dict) -> dict:
     }
 
 
-def serialize_entity(entity: dict, resolve_image_url_fn) -> dict:
+def _attach_navigation_links(
+    item: dict,
+    *,
+    resolve_image_url_fn,
+    build_docreader_url_fn=None,
+    highlight: str = "",
+) -> None:
+    bib = item.get("bib")
+    pagina = item.get("pagina")
+    if not bib or not pagina:
+        return
+
+    item["page_api_url"] = f"/api/page/{bib}/{pagina}"
+    item["page_view_url"] = f"/page/{bib}/{pagina}"
+    if highlight:
+        item["page_view_url"] += f"?q={quote(str(highlight))}"
+    item["image_url"] = resolve_image_url_fn(bib, pagina)
+    if build_docreader_url_fn:
+        item["docreader_url"] = build_docreader_url_fn(bib, pagina)
+
+
+def serialize_entity(entity: dict, resolve_image_url_fn, build_docreader_url_fn=None) -> dict:
     entity["aliases"] = json.loads(entity.get("aliases_json", "[]"))
     entity["attributes"] = json.loads(entity.get("attributes_json", "{}"))
     for collection_name in ("mentions", "relations", "evidences"):
         for item in entity.get(collection_name, []):
             if item.get("bib") and item.get("pagina"):
                 highlight = item.get("surface_form") or item.get("quote") or entity.get("canonical_name") or ""
-                item["page_api_url"] = f"/api/page/{item['bib']}/{item['pagina']}"
-                item["page_view_url"] = f"/page/{item['bib']}/{item['pagina']}"
-                if highlight:
-                    item["page_view_url"] += f"?q={quote(str(highlight))}"
-                item["image_url"] = resolve_image_url_fn(item["bib"], item["pagina"])
+                _attach_navigation_links(
+                    item,
+                    resolve_image_url_fn=resolve_image_url_fn,
+                    build_docreader_url_fn=build_docreader_url_fn,
+                    highlight=highlight,
+                )
     story = entity.get("story") or {}
     for item in story.get("milestones", []):
         if item.get("bib") and item.get("pagina"):
             highlight = item.get("surface_form") or item.get("snippet") or entity.get("canonical_name") or ""
-            item["page_api_url"] = f"/api/page/{item['bib']}/{item['pagina']}"
-            item["page_view_url"] = f"/page/{item['bib']}/{item['pagina']}"
-            if highlight:
-                item["page_view_url"] += f"?q={quote(str(highlight))}"
-            item["image_url"] = resolve_image_url_fn(item["bib"], item["pagina"])
+            _attach_navigation_links(
+                item,
+                resolve_image_url_fn=resolve_image_url_fn,
+                build_docreader_url_fn=build_docreader_url_fn,
+                highlight=highlight,
+            )
     entity["summary"] = _build_entity_summary(entity)
     return entity
 

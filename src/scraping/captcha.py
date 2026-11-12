@@ -20,6 +20,14 @@ from src.config import TESSDATA_DIR
 logger = logging.getLogger(__name__)
 
 
+class OCRIndisponivel(RuntimeError):
+    """Tesseract não inicializa (tessdata ausente ou incompatível): erro de instalação, não do CAPTCHA."""
+
+
+def _driver_is_headless(driver) -> bool:
+    return bool(getattr(driver, "_codex_headless", False))
+
+
 def captcha_visivel(driver) -> bool:
     """Retorna True se o iframe de CAPTCHA estiver visível na página."""
     try:
@@ -69,6 +77,11 @@ def ocr_captcha(img_data: bytes) -> str:
 
         return ""
 
+    except RuntimeError as e:
+        if "init" in str(e).lower():
+            raise OCRIndisponivel(f"{e} (tessdata em {TESSDATA_DIR}; instale tesseract-ocr-eng)") from e
+        logger.warning(f"OCR do CAPTCHA exception: {e}", exc_info=True)
+        return ""
     except Exception as e:
         logger.warning(f"OCR do CAPTCHA exception: {e}", exc_info=True)
         return ""
@@ -90,14 +103,35 @@ def resolver_captcha(driver, max_tentativas=5, timeout_manual=300,
     if not captcha_visivel(driver):
         return True
 
-    for tentativa in range(max_tentativas):
+    headless = _driver_is_headless(driver)
+    auto_retry_deadline = time.time() + timeout_manual if headless and timeout_manual > 0 else None
+    tentativa = 0
+    extended_mode_logged = False
+
+    while True:
         if not captcha_visivel(driver):
             logger.info("CAPTCHA resolvido!")
             if on_success:
                 on_success()
             return True
 
-        logger.info(f"CAPTCHA detectado, tentativa {tentativa + 1}/{max_tentativas}...")
+        tentativa += 1
+        if tentativa > max_tentativas:
+            if not headless:
+                break
+            if auto_retry_deadline and time.time() >= auto_retry_deadline:
+                break
+            if not extended_mode_logged:
+                logger.warning(
+                    "Auto-solve inicial falhou em headless; continuando tentativas automáticas por até %ss...",
+                    timeout_manual,
+                )
+                extended_mode_logged = True
+
+        if tentativa <= max_tentativas:
+            logger.info("CAPTCHA detectado, tentativa %s/%s...", tentativa, max_tentativas)
+        else:
+            logger.info("CAPTCHA detectado, tentativa extra headless #%s...", tentativa - max_tentativas)
 
         try:
             iframe = driver.find_element(By.NAME, "CaptchaWnd")
@@ -114,7 +148,13 @@ def resolver_captcha(driver, max_tentativas=5, timeout_manual=300,
                 driver.switch_to.default_content()
                 continue
 
-            texto_captcha = ocr_captcha(img_data)
+            try:
+                texto_captcha = ocr_captcha(img_data)
+            except OCRIndisponivel as e:
+                # tentar de novo não adianta: falha uma vez, com a causa, em vez de girar até o timeout
+                driver.switch_to.default_content()
+                logger.error("OCR do CAPTCHA indisponível: %s", e)
+                return False
             if not texto_captcha:
                 logger.warning("OCR falhou no CAPTCHA, refreshing...")
                 try:
@@ -156,6 +196,10 @@ def resolver_captcha(driver, max_tentativas=5, timeout_manual=300,
                 driver.switch_to.default_content()
             except Exception:
                 pass
+
+    if headless:
+        logger.error("Timeout esperando CAPTCHA em modo headless")
+        return False
 
     logger.warning("Auto-solve falhou. Resolva o CAPTCHA manualmente...")
     for _ in range(timeout_manual):

@@ -1,0 +1,123 @@
+{
+  "descricao": "Páginas douradas do benchmark visão-primeiro. Recapturar imagens com: python main.py ocr-hires --bib <bib> --keep-images ... (ver README).",
+  "pages": [
+    {
+      "id": "029033_01_00001",
+      "ano": "1825",
+      "motivo": "única página com imagem hi-res local; capa"
+    },
+    {
+      "id": "029033_01_09202",
+      "ano": null,
+      "motivo": "caso Affonso Botelho (sentenças judiciais em 4 colunas)"
+    },
+    {
+      "id": "029033_04_00002",
+      "ano": "1837",
+      "bio_hits": 40,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "029033_10_00012",
+      "ano": "1837",
+      "bio_hits": 35,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "029033_01_10906",
+      "ano": "1837",
+      "bio_hits": 33,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "029033_01_10549",
+      "ano": "1837",
+      "bio_hits": 31,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "029033_10_00006",
+      "ano": "1837",
+      "bio_hits": 30,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "029033_01_10781",
+      "ano": "1837",
+      "bio_hits": 27,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "029033_10_00002",
+      "ano": "1837",
+      "bio_hits": 26,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "029033_01_09631",
+      "ano": "1837",
+      "bio_hits": 26,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "029033_01_09629",
+      "ano": "1837",
+      "bio_hits": 26,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "029033_04_00041",
+      "ano": "1837",
+      "bio_hits": 24,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "029033_01_10902",
+      "ano": "1837",
+      "bio_hits": 23,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "029033_13_00013",
+      "ano": "1837",
+      "bio_hits": 22,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "029033_01_11086",
+      "ano": "1837",
+      "bio_hits": 22,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "029033_01_06943",
+      "ano": "1834",
+      "bio_hits": 22,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "709611_00002",
+      "ano": "1837",
+      "bio_hits": 21,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "029033_13_00006",
+      "ano": "1837",
+      "bio_hits": 21,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "029033_01_10910",
+      "ano": "1837",
+      "bio_hits": 21,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    },
+    {
+      "id": "029033_01_06891",
+      "ano": "1834",
+      "bio_hits": 21,
+      "motivo": "página densa em padrões biográficos (extração GPT-4o de abril)"
+    }
+  ]
+}

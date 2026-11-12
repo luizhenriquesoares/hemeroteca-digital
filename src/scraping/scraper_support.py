@@ -13,11 +13,11 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import TimeoutException
 
+from src.scraping.tls import ssl_context
+
 logger = logging.getLogger(__name__)
 
-SSL_CTX = ssl.create_default_context()
-SSL_CTX.check_hostname = False
-SSL_CTX.verify_mode = ssl.CERT_NONE
+SSL_CTX = ssl_context()
 
 
 def download_image_task(img_src, img_file, cookie_str, user_agent, referer):

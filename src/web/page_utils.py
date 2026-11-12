@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
+from urllib.parse import quote
+
+from src.config import HDB_DOCREADER_URL
 
 _ACERVO_CACHE: dict[str, dict] | None = None
+_PAGE_SUFFIX_RE = re.compile(r"(\d+)$")
 
 
 def _load_acervo_cache(cache_dir: Path) -> dict[str, dict]:
@@ -99,6 +104,23 @@ def resolve_image_url(images_dir: Path, bib: str, pagina: str) -> str | None:
     return None
 
 
+def build_docreader_url(bib: str | None, pagina: str | int | None) -> str | None:
+    bib_value = str(bib or "").strip()
+    pagina_value = str(pagina or "").strip()
+    if not bib_value or not pagina_value:
+        return None
+
+    if pagina_value.isdigit():
+        pagfis = str(int(pagina_value))
+    else:
+        match = _PAGE_SUFFIX_RE.search(pagina_value)
+        if not match:
+            return None
+        pagfis = str(int(match.group(1)))
+
+    return f"{HDB_DOCREADER_URL}?bib={quote(bib_value)}&pagfis={quote(pagfis)}"
+
+
 def read_optional_text(path_str: str | None) -> str | None:
     if not path_str:
         return None
@@ -134,6 +156,7 @@ def serialize_page_record(page: dict, images_dir: Path) -> dict:
         "ano": _clean_editorial_label(page.get("ano", "?"), "Ano"),
         "edicao": _clean_editorial_label(page.get("edicao", "?"), "Edição"),
         "image_url": image_url,
+        "docreader_url": build_docreader_url(bib, pagina),
         "text_path": page.get("text_path"),
         "image_path": page.get("image_path"),
         "ocr_text": ocr_text,

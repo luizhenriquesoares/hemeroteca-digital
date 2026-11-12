@@ -13,6 +13,7 @@ def render_page_view(page: dict, *, query: str = "") -> str:
     ano = escape(str(page.get("ano") or "?"))
     edicao = escape(str(page.get("edicao") or "?"))
     image_url = page.get("image_url")
+    docreader_url = page.get("docreader_url")
     api_url = f"/api/page/{bib}/{pagina}"
     query_text = str(query or "").strip()
     escaped_query = escape(query_text)
@@ -21,6 +22,12 @@ def render_page_view(page: dict, *, query: str = "") -> str:
         f'<a href="{escape(str(image_url))}" target="_blank" rel="noreferrer" '
         'class="px-3 py-2 rounded-lg border border-stone-300 text-stone-700 hover:bg-stone-50">Abrir imagem</a>'
         if image_url
+        else ""
+    )
+    docreader_link = (
+        f'<a href="{escape(str(docreader_url))}" target="_blank" rel="noreferrer" '
+        'class="px-3 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100">Abrir folha na BN</a>'
+        if docreader_url
         else ""
     )
     ocr_text = escape(str(page.get("ocr_text") or "Texto não disponível."))
@@ -243,6 +250,7 @@ def render_page_view(page: dict, *, query: str = "") -> str:
             <div class="actions">
                 <a class="btn" href="{api_url}" target="_blank" rel="noreferrer">Ver JSON da API</a>
                 <button class="btn primary" type="button" id="copy-citation">Copiar citação</button>
+                {docreader_link}
                 {image_link}
             </div>
         </div>

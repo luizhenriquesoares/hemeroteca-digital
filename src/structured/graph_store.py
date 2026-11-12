@@ -16,6 +16,7 @@ Além das relações extraídas, ele também inclui arestas documentais como
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import sqlite3
 from pathlib import Path
@@ -951,6 +952,12 @@ PREDICATE_LABELS = {
 }
 
 
+def _literal_graph_id(layer: str, value: str) -> str:
+    # Display truncation must never merge distinct places, roles or statements.
+    digest = hashlib.sha256(value.strip().encode("utf-8")).hexdigest()[:24]
+    return f"literal_{layer}_{digest}"
+
+
 def _predicate_to_layer(predicate: str):
     for layer, predicates in LAYER_PREDICATES.items():
         if predicate in predicates:
@@ -1023,7 +1030,7 @@ def get_layered_graph(
     central + vizinhança até ``focus_depth`` saltos, seguindo apenas as camadas
     selecionadas.
     """
-    layers = layers or ["family", "roles", "co_mention"]
+    layers = ["family", "roles", "co_mention"] if layers is None else layers
     layer_set = {l.strip() for l in layers if l.strip()}
 
     selected_predicates: set[str] = set()
@@ -1147,8 +1154,8 @@ def get_layered_graph(
 
         # Helper: cria/recupera nó "literal" (cargo, lugar mencionado, etc)
         def _ensure_literal_node(layer: str, literal_value: str) -> str:
-            slug = (literal_value or "").strip()[:40]
-            nid = f"literal_{layer}_{slug}"
+            slug = (literal_value or "").strip()
+            nid = _literal_graph_id(layer, slug)
             if nid not in nodes:
                 nodes[nid] = {
                     "id": nid,
@@ -1178,7 +1185,7 @@ def get_layered_graph(
                     continue
             elif row["object_literal"]:
                 literal = (row["object_literal"] or "").strip()
-                if len(literal) < 4:
+                if len(literal) < 4 or literal.casefold() in {"unknown", "desconhecido", "não identificado", "none", "null"}:
                     continue
                 oid = _ensure_literal_node(layer, literal)
             else:
@@ -1575,10 +1582,10 @@ def _build_ego_network(
                             next_frontier.add(oid_int)
                             visited.add(oid_int)
                 elif row["object_literal"]:
-                    literal = (row["object_literal"] or "").strip()[:40]
-                    if len(literal) < 4:
+                    literal = (row["object_literal"] or "").strip()
+                    if len(literal) < 4 or literal.casefold() in {"unknown", "desconhecido", "não identificado", "none", "null"}:
                         continue
-                    oid_n = f"literal_{layer}_{literal}"
+                    oid_n = _literal_graph_id(layer, literal)
                     if oid_n not in nodes:
                         nodes[oid_n] = {
                             "id": oid_n,
@@ -1726,3 +1733,52 @@ def _build_ego_network(
             "found": True,
         },
     }
+
+
+def get_relation_evidence(relation_id: int, db_path: Path = STRUCTURED_DB) -> dict:
+    """Evidence for one relation, including literal targets and latest review.
+
+    Unlike pair lookup this cannot substitute another predicate's evidence.
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute('''
+            SELECT r.*, s.canonical_name AS subject_name,
+                   COALESCE(o.canonical_name, r.object_literal) AS object_name
+            FROM relations r JOIN entities s ON s.id = r.subject_entity_id
+            LEFT JOIN entities o ON o.id = r.object_entity_id
+            WHERE r.id = ?
+        ''', (relation_id,)).fetchone()
+        if row is None:
+            return {"error": "Relação não encontrada"}
+        review = conn.execute('''SELECT review_status FROM relation_reviews
+                                 WHERE relation_id = ? ORDER BY id DESC LIMIT 1''', (relation_id,)).fetchone()
+        evidences = []
+        for item in _load_relation_evidences(conn, relation_id):
+            evidences.append({"quote": item["quote"], "bib": item["bib"], "pagina": item["pagina"],
+                              "jornal": item["jornal"], "ano": item["ano"], "edicao": item["edicao"],
+                              "page_view_url": _page_view_url(item["bib"], str(item["pagina"]), item["quote"] or "")})
+        return {"relation_id": relation_id, "predicate": row["predicate"],
+                "subject_name": row["subject_name"], "object_name": row["object_name"],
+                "confidence": row["confidence"], "effective_status": review["review_status"] if review else row["status"],
+                "evidences": evidences}
+    finally:
+        conn.close()
+
+
+def group_parallel_edges(graph: dict) -> dict:
+    """One visual edge per predicate; retain every extraction ID for inspection."""
+    grouped = {}
+    for edge in graph.get('edges', []):
+        key = (edge['source'], edge['target'], edge.get('predicate'), edge.get('layer'))
+        if key not in grouped:
+            grouped[key] = {**edge, 'relation_ids': []}
+        ids = grouped[key]['relation_ids']
+        for rid in edge.get('relation_ids', []) + ([edge['relation_id']] if edge.get('relation_id') else []):
+            if rid not in ids:
+                ids.append(rid)
+    edges = list(grouped.values())
+    connected = {e[side] for e in edges for side in ('source', 'target')}
+    return {**graph, 'edges': edges,
+            'nodes': [n for n in graph.get('nodes', []) if n['id'] in connected or n.get('central')]}

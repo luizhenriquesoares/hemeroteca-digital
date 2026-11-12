@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import json
 import logging
 import re
@@ -22,11 +23,13 @@ from src.structured.repository import StructuredRepository
 from src.processing.search import (
     buscar_hibrida,
     buscar_textual_historica,
+    extract_evidence_snippet,
     normalize_text,
 )
 from src.web.entity_service import build_fallback_page, serialize_entity, serialize_entity_search_results
 from src.web.page_view import render_page_view
 from src.web.page_utils import (
+    build_docreader_url as _build_docreader_url_impl,
     busca_textual as _busca_textual,
     count_page_texts as _count_page_texts_impl,
     load_progress_status as _load_progress_status_impl,
@@ -73,6 +76,10 @@ def _resolve_image_url(bib: str, pagina: str) -> str | None:
     return _resolve_image_url_impl(IMAGES_DIR, bib, pagina)
 
 
+def _build_docreader_url(bib: str, pagina: str | int | None) -> str | None:
+    return _build_docreader_url_impl(bib, pagina)
+
+
 def _serialize_page_record(page: dict) -> dict:
     return _serialize_page_record_impl(page, IMAGES_DIR)
 
@@ -115,15 +122,19 @@ def _serialize_entity_comparison(payload: dict) -> dict:
 
 
 def _attach_page_links(item: dict, highlight: str | None = None) -> dict:
-    bib = str(item.get("bib") or "")
-    pagina = str(item.get("pagina") or "")
+    metadata = item.get("metadata") or {}
+    bib = str(item.get("bib") or metadata.get("bib") or "")
+    pagina = str(item.get("pagina") or metadata.get("pagina") or "")
     if not bib or not pagina:
         return item
+    item.setdefault("bib", bib)
+    item.setdefault("pagina", pagina)
     item["page_api_url"] = f"/api/page/{bib}/{pagina}"
     item["page_view_url"] = f"/page/{bib}/{pagina}"
     if highlight:
         item["page_view_url"] += f"?q={quote(str(highlight))}"
     item["image_url"] = _resolve_image_url(bib, pagina)
+    item["docreader_url"] = _build_docreader_url(bib, pagina)
     return item
 
 
@@ -135,6 +146,34 @@ def _serialize_featured_entity(payload: dict) -> dict:
             highlight=snippet.get("surface_form") or payload.get("canonical_name"),
         )
     return payload
+
+
+def _serialize_search_result(query: str, item: dict) -> dict:
+    payload = dict(item)
+    metadata = dict(payload.get("metadata") or {})
+    bib = str(metadata.get("bib") or "")
+    pagina = str(metadata.get("pagina") or "")
+    if bib:
+        payload.setdefault("bib", bib)
+    if pagina:
+        payload.setdefault("pagina", pagina)
+    for key in ("jornal", "periodico", "ano", "edicao"):
+        if metadata.get(key) and key not in payload:
+            payload[key] = metadata.get(key)
+    payload["metadata"] = metadata
+    payload["evidencia"] = extract_evidence_snippet(query, payload.get("texto", ""))
+    payload["evidence_type"] = "explicit_source"
+    payload["evidence_label"] = "Explicito na fonte"
+    if bib and pagina:
+        _attach_page_links(
+            payload,
+            highlight=payload.get("matched_tokens", [query])[:1][0] if payload.get("matched_tokens") else query,
+        )
+    return payload
+
+
+def _serialize_search_results(query: str, results: list[dict]) -> list[dict]:
+    return [_serialize_search_result(query, item) for item in results]
 
 
 def _cache_get(key: tuple, ttl_seconds: float):
@@ -156,7 +195,7 @@ def _cache_set(key: tuple, value: object):
 @app.get("/", response_class=HTMLResponse)
 async def index():
     """Serve o frontend (sempre fresco — sem cache do browser)."""
-    frontend_path = Path(__file__).parent.parent.parent / "frontend" / "index.html"
+    frontend_path = Path(__file__).parent.parent.parent / "frontend" / "workspace.html"
     return HTMLResponse(
         content=frontend_path.read_text(encoding="utf-8"),
         headers={
@@ -165,6 +204,18 @@ async def index():
             "Expires": "0",
         },
     )
+
+
+@app.get("/avancado", response_class=HTMLResponse)
+async def advanced_workspace():
+    path = Path(__file__).parent.parent.parent / "frontend" / "index.html"
+    return HTMLResponse(content=path.read_text(encoding="utf-8"), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/graph/relation-evidence")
+async def graph_relation_evidence(relation_id: int = Query(..., ge=1)):
+    from src.structured.graph_store import get_relation_evidence
+    return await run_in_threadpool(get_relation_evidence, relation_id)
 
 
 @app.get("/sobre", response_class=HTMLResponse)
@@ -189,26 +240,37 @@ async def buscar(
     q: str = Query(..., description="Texto de busca"),
     n: int = Query(10, ge=1, le=50, description="Número de resultados"),
     bib: str = Query(None, description="Filtrar por acervo"),
-    modo: str = Query("semantica", description="Modo: semantica ou textual"),
+    modo: str = Query("semantica", description="Modo: semantica, textual (aproximada) ou literal (indexada)"),
     score_min: float = Query(0.45, ge=0, le=1, description="Score mínimo de relevância"),
     year_from: int = Query(None, ge=1800, le=2100, description="Ano inicial opcional"),
     year_to: int = Query(None, ge=1800, le=2100, description="Ano final opcional"),
 ):
     """Busca nos jornais (semântica ou textual)."""
 
-    if modo == "textual":
-        resultados = buscar_textual_historica(
-            q,
+    if modo == "literal":
+        from src.processing.text_index import buscar_textual_indexada
+        resultados = await run_in_threadpool(
+            buscar_textual_indexada, q, n_results=n, filtro_bib=bib,
+            year_from=year_from, year_to=year_to,
+        )
+    elif modo == "textual":
+        resultados = await run_in_threadpool(
+            buscar_textual_historica, q,
             n_results=max(n * 3, 30) if (year_from or year_to) else n,
             filtro_bib=bib,
         )
     else:
         candidate_n = min(max(n * 6, 50), 150) if (year_from or year_to) else min(n * 3, 50)
-        resultados = buscar_hibrida(q, n_results=candidate_n, filtro_bib=bib)
+        resultados = await run_in_threadpool(buscar_hibrida, q, n_results=candidate_n, filtro_bib=bib)
 
     resultados = _filter_results_by_year(resultados, year_from=year_from, year_to=year_to)
     filtrados = [r for r in resultados if r["score"] >= score_min]
-    return {"query": q, "total": len(filtrados[:n]), "resultados": filtrados[:n]}
+    final = filtrados[:n]
+    return {
+        "query": q,
+        "total": len(final),
+        "resultados": _serialize_search_results(q, final),
+    }
 
 @app.get("/api/stats")
 async def get_stats():
@@ -540,7 +602,8 @@ async def discovery_layered_graph(
         focus_entity_id=focus_id,
         focus_depth=depth,
     )
-    return _cache_set(cache_key, data)
+    from src.structured.graph_store import group_parallel_edges
+    return _cache_set(cache_key, group_parallel_edges(data))
 
 
 @app.get("/api/graph/edge-evidence")
@@ -578,7 +641,7 @@ async def get_entity(entity_id: int):
     entity = await run_in_threadpool(repo.get_entity, entity_id)
     if not entity:
         return {"error": "Entidade não encontrada"}
-    return serialize_entity(entity, _resolve_image_url)
+    return serialize_entity(entity, _resolve_image_url, _build_docreader_url)
 
 
 @app.get("/api/entity-compare")
@@ -725,7 +788,16 @@ async def view_page(
 
 
 # --- Endpoints temporários de transferência de dados ---
-_UPLOAD_SECRET = "hemeroteca2026"
+_UPLOAD_SECRET = os.environ.get("HEMEROTECA_UPLOAD_SECRET") or None
+
+
+def _upload_gate(secret: str) -> dict | None:
+    """Endpoints de transferência ficam desligados sem HEMEROTECA_UPLOAD_SECRET no ambiente."""
+    if not _UPLOAD_SECRET:
+        return {"error": "upload disabled"}
+    if secret != _UPLOAD_SECRET:
+        return {"error": "unauthorized"}
+    return None
 
 @app.post("/api/_upload_chunk")
 async def upload_chunk(
@@ -733,8 +805,8 @@ async def upload_chunk(
     file: UploadFile = File(...),
     append: bool = Query(False, description="Append ao arquivo existente em vez de sobrescrever"),
 ):
-    if secret != _UPLOAD_SECRET:
-        return {"error": "unauthorized"}
+    if denied := _upload_gate(secret):
+        return denied
     upload_path = DATA_DIR / "_upload.tar.gz"
     upload_path.parent.mkdir(parents=True, exist_ok=True)
     mode = "ab" if append else "wb"
@@ -746,8 +818,8 @@ async def upload_chunk(
 
 @app.post("/api/_extract_upload")
 async def extract_upload(secret: str = Query(...)):
-    if secret != _UPLOAD_SECRET:
-        return {"error": "unauthorized"}
+    if denied := _upload_gate(secret):
+        return denied
     import subprocess
     upload_path = DATA_DIR / "_upload.tar.gz"
     if not upload_path.exists():
@@ -761,8 +833,12 @@ async def extract_upload(secret: str = Query(...)):
 
 @app.post("/api/_clear_upload")
 async def clear_upload(secret: str = Query(...)):
-    if secret != _UPLOAD_SECRET:
-        return {"error": "unauthorized"}
+    if denied := _upload_gate(secret):
+        return denied
     upload_path = DATA_DIR / "_upload.tar.gz"
     upload_path.unlink(missing_ok=True)
     return {"status": "cleared"}
+
+# Ferramentas documentais sem chamadas a modelos externos.
+from src.web.research_lab import router as research_lab_router
+app.include_router(research_lab_router)
