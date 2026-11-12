@@ -51,8 +51,32 @@ HUMAN_DELAY_MIN = 0.5  # delay mínimo
 HUMAN_DELAY_MAX = 1.5  # delay máximo
 
 # OCR
-TESSDATA_DIR = DATA_DIR / "tessdata"
-TESSDATA_DIR.mkdir(parents=True, exist_ok=True)
+TESSDATA_LANGS = ("por", "eng")  # por = páginas, eng = CAPTCHA
+
+
+def _tem_tessdata(pasta: Path) -> bool:
+    arquivos = [pasta / f"{lang}.traineddata" for lang in TESSDATA_LANGS]
+    return all(a.is_file() and a.stat().st_size > 0 for a in arquivos)
+
+
+def _resolver_tessdata() -> Path:
+    """Pasta com os modelos do Tesseract: data/tessdata se completa, senão a do sistema.
+
+    Em servidor novo (VPS, Docker) data/tessdata não vem no deploy; sem esse
+    fallback o OCR do CAPTCHA falha em loop com "Failed to init API".
+    """
+    candidatos = [DATA_DIR / "tessdata"]
+    if os.environ.get("TESSDATA_PREFIX"):
+        candidatos.append(Path(os.environ["TESSDATA_PREFIX"]))
+    candidatos += sorted(Path("/usr/share/tesseract-ocr").glob("*/tessdata"), reverse=True)
+    candidatos += [Path("/usr/share/tessdata"), Path("/opt/homebrew/share/tessdata"), Path("/usr/local/share/tessdata")]
+    for pasta in candidatos:
+        if _tem_tessdata(pasta):
+            return pasta
+    return DATA_DIR / "tessdata"
+
+
+TESSDATA_DIR = _resolver_tessdata()
 os.environ["TESSDATA_PREFIX"] = str(TESSDATA_DIR)
 TESSERACT_LANG = "por"  # português
 TESSERACT_PSM = 3  # automatic page segmentation

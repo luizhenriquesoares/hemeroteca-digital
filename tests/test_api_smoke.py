@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import importlib.util
 import json
 import sys
 import tempfile
@@ -89,7 +90,10 @@ def _install_test_stubs():
     sys.modules["starlette.concurrency"] = concurrency
 
 
-_install_test_stubs()
+# Só usa os stubs se as dependências reais não estiverem instaladas: stubs permanentes em
+# sys.modules quebravam os testes seguintes do painel (fastapi.testclient).
+if importlib.util.find_spec("fastapi") is None or importlib.util.find_spec("openai") is None:
+    _install_test_stubs()
 
 import src.config as config
 
@@ -294,7 +298,7 @@ Os Botelhos aparecem como grupo familiar ligado à administração provincial.
         ]
 
         with patch.object(api, "buscar_hibrida", return_value=fake_results):
-            payload = asyncio.run(api.buscar(q="João Botelho", n=10, modo="semantica"))
+            payload = asyncio.run(api.buscar(q="João Botelho", n=10, bib=None, modo="semantica", score_min=0.45, year_from=None, year_to=None))
 
         self.assertEqual(payload["total"], 1)
         result = payload["resultados"][0]

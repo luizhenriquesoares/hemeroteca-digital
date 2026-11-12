@@ -164,6 +164,9 @@ def test_apaga_so_imagem_baixada_pelo_painel(env):
 def test_fatal_reason():
     assert "login" in fatal_reason("Login expired · Run /login").lower()
     assert fatal_reason("JSON fora do schema") is None
+    # sem o CLI instalado (VPS nova) pausa em vez de queimar as tentativas de cada página
+    assert "não está instalado" in fatal_reason("FileNotFoundError: [Errno 2] No such file or directory: 'claude'")
+    assert "DEEPSEEK_API_KEY" in fatal_reason("RuntimeError: Defina DEEPSEEK_API_KEY no ambiente")
 
 
 def test_api_do_painel(env):
@@ -260,3 +263,12 @@ def test_login_protege_o_painel(env):
     assert c.get("/api/state").status_code == 200
     c.cookies.set("painel_sessao", "9999999999.falso")
     assert c.get("/api/state").status_code == 401
+
+
+def test_pagina_curta_ou_incerta_vai_para_revisao():
+    from src.pipeline.worker import needs_review
+
+    assert needs_review({"chars": 40, "confidence": 0.9})  # leitura truncada
+    assert needs_review({"chars": 5000, "confidence": 0.3})
+    assert not needs_review({"chars": 5000, "confidence": 0.9})
+    assert not needs_review({"chars": 5000, "confidence": None})

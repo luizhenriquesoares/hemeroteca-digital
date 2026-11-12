@@ -26,12 +26,19 @@ MAX_WORKERS = 8
 
 # Erros que não são da página: pausar tudo e esperar o usuário.
 FATAL_PATTERNS: list[tuple[re.Pattern, str]] = [
+    # antes do padrão de login: sem o binário cada página gastaria as tentativas e terminaria em erro
+    (re.compile(r"No such file or directory: '?claude'?", re.I),
+     "O Claude Code não está instalado neste computador. Instale (curl -fsSL https://claude.ai/install.sh | bash), "
+     "faça `claude login` e aperte Continuar."),
     (re.compile(r"login expired|/login|not logged in|authenticat|oauth", re.I),
      "O login do Claude expirou. Rode `claude login` no terminal e aperte Continuar."),
     (re.compile(r"usage limit|limit reached|hit your limit|weekly limit|5-hour limit|out of extra usage|rate.?limit", re.I),
      "Limite da assinatura atingido. Espere a cota renovar e aperte Continuar."),
     (re.compile(r"credit balance", re.I), "A conta da API está sem créditos."),
-    (re.compile(r"DEEPSEEK_API_KEY", re.I), "Defina DEEPSEEK_API_KEY no terminal antes de abrir o painel."),
+    (re.compile(r"DEEPSEEK_API_KEY", re.I),
+     "Falta DEEPSEEK_API_KEY: defina no ambiente do painel (na VPS, em /etc/hemeroteca/painel.env) e reinicie."),
+    (re.compile(r"ANTHROPIC_API_KEY|api_key client option must be set|Could not resolve authentication", re.I),
+     "Falta ANTHROPIC_API_KEY para o backend da API: defina no ambiente do painel ou use a assinatura (claude-code)."),
 ]
 
 
@@ -63,6 +70,17 @@ def fatal_reason(error: str) -> str | None:
         if pattern.search(error or ""):
             return reason
     return None
+
+
+# Página de jornal tem milhares de caracteres: bem menos que isso costuma ser leitura truncada
+# (modelo parou cedo, recorte errado) e não pode entrar na base como "ok" sem alguém olhar.
+MIN_CHARS_OK = 300
+MIN_CONFIDENCE_OK = 0.5
+
+
+def needs_review(metrics: dict[str, Any]) -> bool:
+    confidence = metrics.get("confidence")
+    return (metrics.get("chars") or 0) < MIN_CHARS_OK or (confidence is not None and confidence < MIN_CONFIDENCE_OK)
 
 
 # Marcas de leitura incerta que o modelo deixa no texto: [da], [?], [ilegível]...
@@ -231,7 +249,9 @@ class Runner:
         manifest = payload.pop("tile_manifest", None) or []
         payload["tile_boxes"] = [m.get("box") for m in manifest if isinstance(m, dict) and m.get("box")]
         out.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
-        self.store.mark(job_id, page, "ok", worker=None, error=None, finished_at=time.time(), out_path=str(out), **metrics)
+        review = {"review": "revisar"} if needs_review(metrics) else {}
+        self.store.mark(job_id, page, "ok", worker=None, error=None, finished_at=time.time(), out_path=str(out),
+                        **review, **metrics)
         if item["captured"] and self.store.get("apagar_imagens"):
             image.unlink(missing_ok=True)
         return True

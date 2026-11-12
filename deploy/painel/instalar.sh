@@ -9,8 +9,17 @@ CADDY_CT=foxymilhas-landing
 
 echo "== 1/6 pacotes do sistema"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq python3-venv python3-tesserocr tesseract-ocr tesseract-ocr-eng tesseract-ocr-por curl >/dev/null
+PACOTES="python3-venv python3-tesserocr tesseract-ocr tesseract-ocr-eng tesseract-ocr-por curl"
+# só mexe no apt se faltar algo; se outro apt (unattended-upgrades) segura o lock, espera até 10 min
+if ! dpkg -s $PACOTES >/dev/null 2>&1; then
+  for i in $(seq 1 120); do
+    fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock >/dev/null 2>&1 || break
+    [ "$i" = 1 ] && echo "   outro apt esta rodando, esperando o lock..."
+    sleep 5
+  done
+  apt-get -o DPkg::Lock::Timeout=600 update -qq
+  apt-get -o DPkg::Lock::Timeout=600 install -y -qq $PACOTES >/dev/null
+fi
 
 echo "== 2/6 usuario hemeroteca e venv"
 id hemeroteca >/dev/null 2>&1 || useradd --system --home /opt/hemeroteca --shell /bin/bash hemeroteca
@@ -22,10 +31,10 @@ fi
 sudo -u hemeroteca /opt/hemeroteca/venv/bin/pip install -q --upgrade pip
 sudo -u hemeroteca /opt/hemeroteca/venv/bin/pip install -q -r "$APP/deploy/painel/requirements-painel.txt"
 # o OCR do CAPTCHA procura eng.traineddata em data/tessdata (src/config.py: TESSDATA_DIR)
-SYS_TESSDATA=$(dirname "$(ls /usr/share/tesseract-ocr/*/tessdata/eng.traineddata | head -1)")
+SYS_TESSDATA=$(dirname "$(ls /usr/share/tesseract-ocr/*/tessdata/eng.traineddata | sort -V | tail -1)")
 sudo -u hemeroteca mkdir -p "$APP/data/tessdata"
 for L in eng por; do
-  [ -f "$APP/data/tessdata/$L.traineddata" ] || sudo -u hemeroteca cp "$SYS_TESSDATA/$L.traineddata" "$APP/data/tessdata/"
+  [ -s "$APP/data/tessdata/$L.traineddata" ] || sudo -u hemeroteca cp "$SYS_TESSDATA/$L.traineddata" "$APP/data/tessdata/"
 done
 
 echo "== 3/6 Claude Code (leitura pela assinatura)"
