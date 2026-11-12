@@ -10,7 +10,7 @@ CADDY_CT=foxymilhas-landing
 echo "== 1/6 pacotes do sistema"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq python3-venv python3-tesserocr tesseract-ocr tesseract-ocr-por curl >/dev/null
+apt-get install -y -qq python3-venv python3-tesserocr tesseract-ocr tesseract-ocr-eng tesseract-ocr-por curl >/dev/null
 
 echo "== 2/6 usuario hemeroteca e venv"
 id hemeroteca >/dev/null 2>&1 || useradd --system --home /opt/hemeroteca --shell /bin/bash hemeroteca
@@ -21,11 +21,19 @@ if [ ! -x /opt/hemeroteca/venv/bin/python ]; then
 fi
 sudo -u hemeroteca /opt/hemeroteca/venv/bin/pip install -q --upgrade pip
 sudo -u hemeroteca /opt/hemeroteca/venv/bin/pip install -q -r "$APP/deploy/painel/requirements-painel.txt"
+# o OCR do CAPTCHA procura eng.traineddata em data/tessdata (src/config.py: TESSDATA_DIR)
+SYS_TESSDATA=$(dirname "$(ls /usr/share/tesseract-ocr/*/tessdata/eng.traineddata | head -1)")
+sudo -u hemeroteca mkdir -p "$APP/data/tessdata"
+for L in eng por; do
+  [ -f "$APP/data/tessdata/$L.traineddata" ] || sudo -u hemeroteca cp "$SYS_TESSDATA/$L.traineddata" "$APP/data/tessdata/"
+done
 
 echo "== 3/6 Claude Code (leitura pela assinatura)"
-if ! sudo -u hemeroteca -i bash -lc 'command -v claude' >/dev/null 2>&1; then
-  sudo -u hemeroteca -i bash -lc 'curl -fsSL https://claude.ai/install.sh | bash' >/dev/null
+# o painel.service procura o claude em /opt/hemeroteca/.local/bin
+if [ ! -x /opt/hemeroteca/.local/bin/claude ]; then
+  sudo -u hemeroteca -i bash -lc 'curl -fsSL https://claude.ai/install.sh | bash'
 fi
+[ -x /opt/hemeroteca/.local/bin/claude ] || { echo "ERRO: claude nao instalado em /opt/hemeroteca/.local/bin"; exit 1; }
 
 echo "== 4/6 senha do painel"
 if [ ! -f /etc/hemeroteca/painel.env ]; then
